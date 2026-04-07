@@ -6,6 +6,7 @@ BUILD_DIR := ./$(TARGET)
 OBJ_DIR := ./obj
 HOSTDIR := ../../sw/host_heimdall
 BLIB_DIR := ../../libs/bluelibrary
+PLRAM_URAM_TCL := ./scripts/plram_uram.tcl
 #----------------------------------------------------------------------------------------
 # 2. Host C++ Global Settings
 #----------------------------------------------------------------------------------------
@@ -17,7 +18,7 @@ VIVADO := $(XILINX_VIVADO)/bin/vivado
 BSCFLAGS := -show-schedule -aggressive-conditions 
 BSCFLAGS_SYNTH := -bdir $(OBJ_DIR) -vdir $(OBJ_DIR)/verilog -simdir $(OBJ_DIR) -info-dir $(OBJ_DIR) -fdir $(OBJ_DIR) 
 JOBS := 8
-VPPFLAGS := --vivado.param general.maxThreads=$(JOBS) --vivado.impl.jobs $(JOBS) --vivado.synth.jobs $(JOBS) --temp_dir $(BUILD_DIR) --log_dir $(BUILD_DIR) --report_dir $(BUILD_DIR) --report_level 2
+VPPFLAGS := --vivado.param general.maxThreads=$(JOBS) --vivado.impl.jobs $(JOBS) --vivado.synth.jobs $(JOBS) --temp_dir $(BUILD_DIR) --log_dir $(BUILD_DIR) --report_dir $(BUILD_DIR) --report_level 2 --advanced.param compiler.userPreSysLinkOverlayTcl=$(PLRAM_URAM_TCL)
 #----------------------------------------------------------------------------------------
 # 4. Targets Declaration
 #----------------------------------------------------------------------------------------
