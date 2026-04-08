@@ -71,20 +71,33 @@ package: host build emconfig
 	cd $(BUILD_DIR) && tar czvf hw_package.tgz hw_package/
 #----------------------------------------------------------------------------------------
 # 9. Run Application (Auto-handles Emulation Mode)
+#
+#   - env -u / env VAR=val scopes the variable to the child process only,
+#     so switching between hw_emu and hw in the SAME terminal is safe.
+#   - emconfig.json is copied in for hw_emu and removed before hw run to
+#     prevent XRT from misdetecting emulation mode.
+#   - ARGS is passed through verbatim to the host binary.
+#     Usage: make run TARGET=hw ARGS="<packet_file>"
+#        ex: make run TARGET=hw_emu ARGS="test_packets.bin"
 #----------------------------------------------------------------------------------------
 XCLBIN_ABS_PATH := $(CURDIR)/$(BUILD_DIR)/kernel.xclbin
-run: 
+
+run: host
 ifeq ($(TARGET),hw_emu)
 	@echo "========================================="
-	@echo " Running Hardware Emulation... "
+	@echo " Running Hardware Emulation (hw_emu)     "
 	@echo "========================================="
-	cp -rf $(BUILD_DIR)/emconfig.json $(HOSTDIR)/
-	cd $(HOSTDIR) && export XCL_EMULATION_MODE=hw_emu && ./obj/main $(XCLBIN_ABS_PATH)
+	cp -f $(BUILD_DIR)/emconfig.json $(HOSTDIR)/
+	cd $(HOSTDIR) && env -u XCL_EMULATION_MODE \
+		env XCL_EMULATION_MODE=hw_emu \
+		./obj/main $(XCLBIN_ABS_PATH) $(ARGS)
 else
 	@echo "========================================="
-	@echo " Running on Actual Hardware... "
+	@echo " Running on Actual Hardware (hw)         "
 	@echo "========================================="
-	cd $(HOSTDIR) && unset XCL_EMULATION_MODE && ./obj/main $(XCLBIN_ABS_PATH)
+	@rm -f $(HOSTDIR)/emconfig.json
+	cd $(HOSTDIR) && env -u XCL_EMULATION_MODE \
+		./obj/main $(XCLBIN_ABS_PATH) $(ARGS)
 endif
 #----------------------------------------------------------------------------------------
 # 10. Cleaning Rules
@@ -94,6 +107,7 @@ clean:
 	rm -rf $(OBJ_DIR) *.log *.jou xilinx* .Xil _x emconfig.json
 	rm -rf ./analyzer_input
 	rm -rf *.csv xrt.run_summary
+	rm -f $(HOSTDIR)/emconfig.json
 	$(MAKE) -C $(HOSTDIR) clean
 
 cleanall: clean
