@@ -6,6 +6,7 @@ import Vector::*;
 import Clocks :: *;
 
 import KernelMain::*;
+import KernelTypes::*;
 import LongEngineTypes::*;
 
 interface KernelTopIfc;
@@ -39,6 +40,7 @@ module kernel (KernelTopIfc);
 	endrule
 
 	Reg#(Bool) started <- mkReg(False);
+	Reg#(Bool) kernelDonePending <- mkReg(False);
 	rule assertControl;
 		if ( !started ) begin
 			axi4control.ap_idle;
@@ -61,14 +63,19 @@ module kernel (KernelTopIfc);
 		started <= True;
 	endrule
 
-	// Check KernelMain operation is finished
-	rule checkDone ( started );
+	// Latch kernel completion first, then wait for output AXI writes to drain.
+	rule latchDone ( started && !kernelDonePending );
 		Bool d <- kernelMain.done;
 		if ( d ) begin
-			axi4control.ap_done();
-			axi4control.ap_ready;
-			started <= False;
+			kernelDonePending <= True;
 		end
+	endrule
+
+	rule checkDone ( started && kernelDonePending && axi4mem[1].writeIdle );
+		axi4control.ap_done();
+		axi4control.ap_ready;
+		started <= False;
+		kernelDonePending <= False;
 	endrule
 
 	for ( Integer i = 0; i < valueOf(MemPortCnt); i=i+1 ) begin

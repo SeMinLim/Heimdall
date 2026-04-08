@@ -61,6 +61,7 @@ interface Axi4MemoryMasterIfc#(numeric type addrSz, numeric type dataSz);
 
 	method Action writeReq(Bit#(addrSz) addr, Bit#(addrSz) size);
 	method Action write(Bit#(dataSz) data);
+	method Bool writeIdle;
 endinterface
 
 (* synthesize *)
@@ -139,6 +140,9 @@ module mkAxi4MemoryMaster (Axi4MemoryMasterIfc#(addrSz,dataSz))
 			end
 			curBurstLeft <= nextBurstLeft;
 			writeWordQ.deq;
+			if ( nextBurstLeft == 0 ) begin
+				writeWordInflightUp <= writeWordInflightUp + 1;
+			end
 			dataWriteW.wset(tuple2(writeWordQ.first, nextBurstLeft == 0));
 		end
 	endrule
@@ -280,6 +284,14 @@ module mkAxi4MemoryMaster (Axi4MemoryMasterIfc#(addrSz,dataSz))
 	endmethod
 	method Action write(Bit#(dataSz) data);
 		writeWordQ.enq(data);
+	endmethod
+	method Bool writeIdle;
+		return !writeBurstReqQ.notEmpty
+		    && !writeWordQ.notEmpty
+		    && !writeBurstSubQ.notEmpty
+		    && (writeBurstBytesLeft == 0)
+		    && (curBurstLeft == 0)
+		    && (writeWordInflightUp == writeWordInflightDn);
 	endmethod
 endmodule
 
