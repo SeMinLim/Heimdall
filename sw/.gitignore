@@ -1,0 +1,5 @@
+# Build output
+host_*/obj/
+
+# Emulation config
+host_*/emconfig.json

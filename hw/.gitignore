@@ -1,0 +1,32 @@
+# BSC compilation output
+kernel_*/obj/
+
+# Vitis/v++ build outputs
+kernel_*/hw/
+kernel_*/hw_emu/
+
+# Vivado / v++ log & journal files
+kernel_*/*.log
+kernel_*/*.jou
+
+# Vivado temporary directories
+kernel_*/xilinx*/
+kernel_*/.Xil/
+kernel_*/_x/
+kernel_*/.ipcache/
+
+# Emulation config
+kernel_*/emconfig.json
+
+# Vitis Analyzer & reports
+kernel_*/analyzer_input/
+kernel_*/*.csv
+kernel_*/xrt.run_summary
+
+# XRT / XCLBIN link summaries
+kernel_*/*.xclbin.info
+kernel_*/*.xclbin.link_summary
+kernel_*/*.ltx
+
+# nohup background build output
+kernel_*/nohup.out
