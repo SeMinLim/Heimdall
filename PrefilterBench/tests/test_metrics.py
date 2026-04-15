@@ -40,7 +40,7 @@ class TestRuleCollisionCount:
         assert count >= 0
 
     def test_identical_rules_collision(self):
-        rules = [(0, b"\xAA" * 8), (0, b"\xAA" * 8)]
+        rules = [(0, b"\xaa" * 8), (0, b"\xaa" * 8)]
         count = rule_collision_count(rules, crc32, truncate, 19)
         assert count == 1  # 2 rules map to same address → 1 collision
 

@@ -22,9 +22,7 @@ def ascii_packets(count: int, seed: int) -> Iterator[Packet]:
         yield payload, PAYLOAD_SIZE
 
 
-def mixed_length_packets(
-    count: int, short_ratio: float, seed: int
-) -> Iterator[Packet]:
+def mixed_length_packets(count: int, short_ratio: float, seed: int) -> Iterator[Packet]:
     rng = random.Random(seed)
     for _ in range(count):
         if rng.random() < short_ratio:
