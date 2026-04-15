@@ -2,8 +2,8 @@
 ///
 /// Usage:
 ///   ./pattern_selector                           # synthetic 64K benchmark
-///   ./pattern_selector --real-only [path.bin]    # real IPS data from HPAT
-///   file
+///   ./pattern_selector --real-only [path.bin]    # real IPS data from HPAT file
+///   ./pattern_selector --export-json [path.bin]  # export selected patterns as JSON
 
 #include <algorithm>
 #include <cassert>
@@ -411,6 +411,28 @@ static int run_real_benchmark(const char* bin_path) {
 }
 
 int main(int argc, char* argv[]) {
+  if (argc >= 2 && std::strcmp(argv[1], "--export-json") == 0) {
+    const auto default_bin_path = default_real_patterns_path();
+    const char* bin_path = (argc >= 3) ? argv[2] : default_bin_path.c_str();
+    auto ds = benchmark_data::load_real_patterns(bin_path);
+    auto results = select_representative_patterns(
+        ds.records, kDefaultRecordSize, ds.window_size, true, {}, true,
+        ds.pattern_lens);
+
+    std::printf("[\n");
+    for (std::size_t i = 0; i < results.size(); ++i) {
+      const auto& r = results[i];
+      std::printf("  {\"index\": %zu, \"offset\": %d, \"pattern_hex\": \"",
+                  r.record_index, r.offset);
+      for (auto b : r.pattern) std::printf("%02x", b);
+      std::printf("\", \"score\": %.6f}", r.score);
+      if (i + 1 < results.size()) std::putchar(',');
+      std::putchar('\n');
+    }
+    std::puts("]");
+    return 0;
+  }
+
   if (argc >= 2 && std::strcmp(argv[1], "--real-only") == 0) {
     const auto default_bin_path = default_real_patterns_path();
     const char* bin_path = (argc >= 3) ? argv[2] : default_bin_path.c_str();
