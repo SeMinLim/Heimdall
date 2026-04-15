@@ -67,7 +67,7 @@ def plot_mi_matrix(
     n = len(arr)
     for i in range(bits):
         for j in range(i, bits):
-            p11 = np.sum(bit_vectors[i] & bit_vectors[j]) / n
+            p11 = np.mean(bit_vectors[i] * bit_vectors[j])
             p1i = np.mean(bit_vectors[i])
             p1j = np.mean(bit_vectors[j])
             if p11 > 0 and p1i > 0 and p1j > 0:
