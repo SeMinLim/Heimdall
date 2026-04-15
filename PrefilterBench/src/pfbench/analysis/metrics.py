@@ -5,11 +5,9 @@ from typing import Callable
 
 import numpy as np
 
-from pfbench.core.bloom import LaneBloomFilter, NUM_LANES
+from pfbench.constants import NUM_LANES, Packet
+from pfbench.core.bloom import LaneBloomFilter
 from pfbench.data.anchor import extract_anchors
-
-
-Packet = tuple[bytes, int]
 
 
 def lane_fill_rates(bf: LaneBloomFilter) -> list[float]:

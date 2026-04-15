@@ -4,8 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-
-EXPECTED_PATTERN_LEN = 8
+from pfbench.constants import ANCHOR_SIZE
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,9 +21,9 @@ def load_hex_list(path: Path) -> list[RulePattern]:
             continue
         offset_str, hex_str = stripped.split()
         raw = bytes.fromhex(hex_str)
-        if len(raw) != EXPECTED_PATTERN_LEN:
+        if len(raw) != ANCHOR_SIZE:
             raise ValueError(
-                f"Pattern must be {EXPECTED_PATTERN_LEN} bytes, got {len(raw)}: {hex_str}"
+                f"Pattern must be {ANCHOR_SIZE} bytes, got {len(raw)}: {hex_str}"
             )
         patterns.append(RulePattern(offset=int(offset_str), pattern=raw))
     return patterns
@@ -35,9 +34,9 @@ def load_json_export(path: Path) -> list[RulePattern]:
     patterns: list[RulePattern] = []
     for record in data:
         raw = bytes.fromhex(record["pattern_hex"])
-        if len(raw) != EXPECTED_PATTERN_LEN:
+        if len(raw) != ANCHOR_SIZE:
             raise ValueError(
-                f"Pattern must be {EXPECTED_PATTERN_LEN} bytes, got {len(raw)}"
+                f"Pattern must be {ANCHOR_SIZE} bytes, got {len(raw)}"
             )
         patterns.append(RulePattern(offset=record["offset"], pattern=raw))
     return patterns

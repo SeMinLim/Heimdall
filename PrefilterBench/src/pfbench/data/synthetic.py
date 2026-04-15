@@ -3,9 +3,7 @@
 import random
 from collections.abc import Iterator
 
-Packet = tuple[bytes, int]  # (payload_64B, payload_len)
-
-PAYLOAD_SIZE = 64
+from pfbench.constants import PAYLOAD_SIZE, Packet
 
 
 def uniform_packets(count: int, seed: int) -> Iterator[Packet]:

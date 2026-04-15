@@ -5,9 +5,7 @@ from pathlib import Path
 
 import dpkt
 
-Packet = tuple[bytes, int]  # (payload_64B, payload_len)
-
-PAYLOAD_SIZE = 64
+from pfbench.constants import PAYLOAD_SIZE, Packet
 
 
 def load_pcap(path: Path) -> Iterator[Packet]:

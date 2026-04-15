@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import matplotlib
 
+from pfbench.constants import NUM_LANES
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -30,8 +32,7 @@ def plot_occupancy_stripe(
     title: str = "Lane × Address Occupancy",
 ) -> None:
     size = 1 << bits
-    num_lanes = 57
-    matrix = np.zeros((num_lanes, size))
+    matrix = np.zeros((NUM_LANES, size))
     for lane, addrs in occupancy_by_lane.items():
         for addr in addrs:
             matrix[lane, addr] += 1

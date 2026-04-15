@@ -2,7 +2,7 @@
 
 from typing import Callable
 
-NUM_LANES = 57
+from pfbench.constants import NUM_LANES
 
 
 class LaneBloomFilter:
