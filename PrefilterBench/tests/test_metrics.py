@@ -1,11 +1,11 @@
 import numpy as np
 
-from pfbench.core.bloom import LaneBloomFilter
+from pfbench.core.bloom import BloomFilter
 from pfbench.core.hash import crc32
 from pfbench.core.reduce import truncate
 from pfbench.data.anchor import extract_anchors
 from pfbench.analysis.metrics import (
-    lane_fill_rates,
+    fill_rate,
     rule_collision_count,
     per_lane_fp_rates,
     per_packet_fp_rate,
@@ -15,39 +15,40 @@ from pfbench.analysis.metrics import (
 
 
 def _make_populated_filter():
-    """Build a 10-bit filter with some known rules."""
-    bf = LaneBloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
-    # insert 5 rules at offset 0
+    """Build a 10-bit shared filter with some known rules."""
+    bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
     for i in range(5):
-        bf.insert(offset=0, pattern=bytes([i]) * 8)
+        bf.insert(pattern=bytes([i]) * 8)
     return bf
 
 
-class TestLaneFillRates:
+class TestFillRate:
     def test_basic(self):
         bf = _make_populated_filter()
-        rates = lane_fill_rates(bf)
-        assert len(rates) == 57
-        assert rates[0] > 0.0
-        assert all(r == 0.0 for r in rates[1:])
+        rate = fill_rate(bf)
+        assert isinstance(rate, float)
+        assert rate > 0.0
+
+    def test_empty(self):
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        assert fill_rate(bf) == 0.0
 
 
 class TestRuleCollisionCount:
     def test_no_collision(self):
-        rules = [(0, bytes([i]) * 8) for i in range(3)]
-        count = rule_collision_count(rules, crc32, truncate, 19)
-        # 3 distinct patterns, likely 3 distinct addresses at 19 bits
+        patterns = [bytes([i]) * 8 for i in range(3)]
+        count = rule_collision_count(patterns, crc32, truncate, 19)
         assert count >= 0
 
     def test_identical_rules_collision(self):
-        rules = [(0, b"\xaa" * 8), (0, b"\xaa" * 8)]
-        count = rule_collision_count(rules, crc32, truncate, 19)
-        assert count == 1  # 2 rules map to same address → 1 collision
+        patterns = [b"\xaa" * 8, b"\xaa" * 8]
+        count = rule_collision_count(patterns, crc32, truncate, 19)
+        assert count == 1
 
 
 class TestPerLaneFpRates:
     def test_empty_filter_zero_fp(self):
-        bf = LaneBloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
         packets = [(bytes(64), 64)]
         rates = per_lane_fp_rates(bf, packets)
         assert len(rates) == 57
@@ -55,17 +56,14 @@ class TestPerLaneFpRates:
 
     def test_populated_filter(self):
         bf = _make_populated_filter()
-        # generate packets and check lane 0 has some FP rate
         packets = [(bytes([i % 256]) * 64, 64) for i in range(100)]
         rates = per_lane_fp_rates(bf, packets)
         assert isinstance(rates[0], float)
-        # Other lanes should be 0 (no rules inserted)
-        assert all(r == 0.0 for r in rates[1:])
 
 
 class TestPerPacketFpRate:
     def test_empty_filter(self):
-        bf = LaneBloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
         packets = [(bytes(64), 64)] * 10
         rate = per_packet_fp_rate(bf, packets)
         assert rate == 0.0
@@ -74,6 +72,7 @@ class TestPerPacketFpRate:
         bf = _make_populated_filter()
         packets = [(bytes([i % 256]) * 64, 64) for i in range(50)]
         rate = per_packet_fp_rate(bf, packets)
+        assert 0.0 <= rate <= 1.0
         assert 0.0 <= rate <= 1.0
 
 

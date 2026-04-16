@@ -6,29 +6,29 @@ from typing import Callable
 import numpy as np
 
 from pfbench.constants import NUM_LANES, Packet
-from pfbench.core.bloom import LaneBloomFilter
+from pfbench.core.bloom import BloomFilter
 from pfbench.data.anchor import extract_anchors
 
 
-def lane_fill_rates(bf: LaneBloomFilter) -> list[float]:
-    return bf.fill_rates()
+def fill_rate(bf: BloomFilter) -> float:
+    return bf.fill_rate()
 
 
 def rule_collision_count(
-    rules: list[tuple[int, bytes]],
+    patterns: list[bytes],
     hash_fn: Callable[[bytes], int],
     reduce_fn: Callable[[int, int], int],
     bits: int,
 ) -> int:
-    seen: dict[tuple[int, int], int] = Counter()
-    for offset, pattern in rules:
+    seen: dict[int, int] = Counter()
+    for pattern in patterns:
         addr = reduce_fn(hash_fn(pattern), bits)
-        seen[(offset, addr)] += 1
+        seen[addr] += 1
     return sum(c - 1 for c in seen.values() if c > 1)
 
 
 def per_lane_fp_rates(
-    bf: LaneBloomFilter,
+    bf: BloomFilter,
     packets: list[Packet],
 ) -> list[float]:
     hits = [0] * NUM_LANES
@@ -37,13 +37,13 @@ def per_lane_fp_rates(
         anchors = extract_anchors(payload, length)
         for lane, anchor in enumerate(anchors):
             counts[lane] += 1
-            if bf.query(lane, anchor):
+            if bf.query(anchor):
                 hits[lane] += 1
     return [h / c if c > 0 else 0.0 for h, c in zip(hits, counts)]
 
 
 def per_packet_fp_rate(
-    bf: LaneBloomFilter,
+    bf: BloomFilter,
     packets: list[Packet],
 ) -> float:
     if not packets:
@@ -51,7 +51,7 @@ def per_packet_fp_rate(
     fp_packets = 0
     for payload, length in packets:
         anchors = extract_anchors(payload, length)
-        if any(bf.query(lane, anchor) for lane, anchor in enumerate(anchors)):
+        if any(bf.query(anchor) for anchor in anchors):
             fp_packets += 1
     return fp_packets / len(packets)
 
