@@ -29,12 +29,12 @@ def test_smoke_synthetic(tmp_path):
     result = run_experiment(config)
 
     # Check that metrics are present
-    assert "lane_fill_rates" in result
+    assert "fill_rate" in result
     assert "rule_collisions" in result
     assert "per_lane_fp_rates" in result
     assert "per_packet_fp_rate" in result
     assert isinstance(result["per_packet_fp_rate"], float)
-    assert len(result["lane_fill_rates"]) == 57
+    assert isinstance(result["fill_rate"], float)
     assert len(result["per_lane_fp_rates"]) == 57
 
     # Check output directory was created with plots

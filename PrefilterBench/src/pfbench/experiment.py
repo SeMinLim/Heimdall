@@ -6,12 +6,12 @@ from pathlib import Path
 
 from pfbench.core import hash as hash_mod
 from pfbench.core import reduce as reduce_mod
-from pfbench.core.bloom import LaneBloomFilter
+from pfbench.core.bloom import BloomFilter
 from pfbench.data.pattern import load_hex_list, load_json_export
 from pfbench.data.anchor import extract_anchors
 from pfbench.data.synthetic import uniform_packets, ascii_packets, mixed_length_packets
 from pfbench.analysis.metrics import (
-    lane_fill_rates,
+    fill_rate,
     rule_collision_count,
     per_lane_fp_rates,
     per_packet_fp_rate,
@@ -66,10 +66,10 @@ def run_experiment(config: ExperimentConfig) -> dict:
     else:
         raise ValueError(f"Unknown rules format: {config.rules_format}")
 
-    # Build per-lane bloom filter
-    bf = LaneBloomFilter(hash_fn=hash_fn, reduce_fn=reduce_fn, address_bits=bits)
+    # Build shared bloom filter
+    bf = BloomFilter(hash_fn=hash_fn, reduce_fn=reduce_fn, address_bits=bits)
     for rule in rules:
-        bf.insert(offset=rule.offset, pattern=rule.pattern)
+        bf.insert(pattern=rule.pattern)
 
     # Load packets
     if config.packet_source == "synthetic_uniform":
@@ -97,9 +97,9 @@ def run_experiment(config: ExperimentConfig) -> dict:
 
     # Compute metrics
     result = {
-        "lane_fill_rates": lane_fill_rates(bf),
+        "fill_rate": fill_rate(bf),
         "rule_collisions": rule_collision_count(
-            [(r.offset, r.pattern) for r in rules], hash_fn, reduce_fn, bits
+            [r.pattern for r in rules], hash_fn, reduce_fn, bits
         ),
         "per_lane_fp_rates": per_lane_fp_rates(bf, packets),
         "per_packet_fp_rate": per_packet_fp_rate(bf, packets),
@@ -122,6 +122,7 @@ def run_experiment(config: ExperimentConfig) -> dict:
         else [round(x, 8) for x in v]
         for k, v in result.items()
     }
+    serializable["fill_rate"] = round(result["fill_rate"], 8)
     serializable["per_packet_fp_rate"] = round(result["per_packet_fp_rate"], 8)
     with open(out_dir / "metrics.json", "w") as f:
         json.dump(serializable, f, indent=2)

@@ -48,6 +48,7 @@ def main():
 
     print(f"Running experiment: {args.hash} + {args.reduce} @ {args.bits} bits")
     result = run_experiment(config)
+    print(f"Fill rate: {result['fill_rate']:.6f}")
     print(f"Per-packet FP rate: {result['per_packet_fp_rate']:.6f}")
     print(f"Rule collisions: {result['rule_collisions']}")
     print(f"Results saved to: {args.output}")
