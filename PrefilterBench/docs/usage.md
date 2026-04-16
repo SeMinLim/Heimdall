@@ -51,7 +51,7 @@ IPS XLSX workbook
 
    Each record contains:
    - `index`: record index in the original HPAT dataset
-   - `offset`: byte offset within the 64-byte record where the best 8-byte window was selected (determines which bloom filter lane this rule populates)
+   - `offset`: byte offset within the 64-byte record where the best 8-byte window was selected
    - `pattern_hex`: the selected 8-byte representative pattern in hex
    - `score`: composite quality score from the selection model
 
@@ -139,6 +139,16 @@ results/
 
 ## Architecture Notes
 
-- **Per-lane filters**: The hardware prefilter uses 57 independent bloom filters (one per extraction lane). A rule selected at offset K populates only lane K's filter. Each lane is sparse (~rules/57 entries).
-- **Application-layer payload**: PCAP packets are stripped to application-layer payload (after Ethernet/IP/TCP-UDP headers) before anchor extraction.
-- **57 overlapping anchors**: From a 64-byte payload of length L, valid anchors at offset `i` where `i + 8 <= L`, up to 57 lanes maximum.
+### Hardware prefilter design
+
+The Heimdall hardware prefilter extracts up to **57 overlapping 8-byte anchors** from each incoming packet's application-layer payload (sliding window at offsets 0–56). Every anchor is looked up in a bloom filter to decide whether the packet might match any IPS rule.
+
+To perform all 57 lookups in a single cycle, the hardware physically **replicates the bloom filter 57 times** — one copy per extraction lane. All 57 copies are **identical**: every rule pattern's hash address is written to every copy during the offline programming phase. The replication is purely a throughput optimization; logically there is one shared filter.
+
+### What PrefilterBench models
+
+Since all 57 hardware copies contain the same bits, PrefilterBench maintains **a single bloom filter** (one bit array of $2^N$ slots). All selected rule patterns(substrings) are inserted into this one filter, and all 57 packet anchors are queried against it.
+
+- **Rule insertion**: `hash(pattern) → addr`, set `filter[addr] = 1`. The `offset` field from PatternSelector records where the 8-byte window was selected within the 64-byte rule record; it is stored for traceability but does not affect the bloom filter.
+- **Packet query**: For each packet, extract anchors at offsets 0 through `min(payload_len - 8, 56)`. Each anchor is hashed and looked up in the same filter. A packet is flagged if **any** anchor matches.
+- **Application-layer payload**: PCAP packets are stripped to their application-layer payload (past Ethernet / IP / TCP-UDP headers) before anchor extraction.
