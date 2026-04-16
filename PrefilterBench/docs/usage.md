@@ -137,6 +137,48 @@ results/
 └── mi_matrix.png        # pairwise bit mutual information
 ```
 
+## Experiment Design
+
+### Two kinds of "collision"
+
+PrefilterBench measures two distinct phenomena that are sometimes both called "collision":
+
+**A) Rule-Rule Collision** - different rule patterns that hash to the same bloom filter address. This raises the filter's fill rate (fraction of 1-bits), which in turn raises the probability of false positives. Measurable from the rule set alone, no packets needed. Reported as `rule_collisions` in `metrics.json`.
+
+**B) Packet-Rule False Positive** - a packet anchor hashes to an address that is set to 1, but the packet does not actually match any rule. This is the metric that directly impacts IPS throughput. Requires both rules and packet traffic. Reported as `per_lane_fp_rates` and `per_packet_fp_rate`.
+
+A and B are correlated but not equivalent: high rule collision does not guarantee high packet FP (if real traffic avoids those addresses), and low collision does not guarantee low FP (if traffic clusters around occupied addresses).
+
+### Exploration axes
+
+| Axis | Variable | Values | Rationale |
+|------|----------|--------|-----------|
+| Hash function | `--hash` | `crc32`, `crc32c` | 1st / 2nd prefilter use different hash functions |
+| Reduction | `--reduce` | `truncate`, `xor_fold_overlap`, `xor_fold_kway`, `xor_fold_16` | Different 32→N bit mappings affect address uniformity |
+| Address bits | `--bits` | 17, 18, 19, 20 | BRAM/URAM budget trade-off (see table below) |
+| Rule set | `--rules` | Real IPS rules (500), scaled-up sets (4K, 16K, 64K) | Fill rate scales with rule count |
+| Packet traffic | `--packets` | Real PCAP, `synthetic_uniform`, `synthetic_ascii`, `synthetic_mixed` | FP rate depends on traffic distribution |
+
+### Address bits vs. hardware cost
+
+| Bits | Slots | Memory per copy | ×57 copies | 500-rule fill rate |
+|------|-------|-----------------|------------|-------------------|
+| 17 | 128K | 16 KB | 0.9 MB | ~0.4% |
+| 18 | 256K | 32 KB | 1.8 MB | ~0.2% |
+| **19** | **512K** | **64 KB** | **3.6 MB** | **~0.1%** |
+| 20 | 1M | 128 KB | 7.1 MB | ~0.05% |
+
+At 4K rules, fill rates are roughly 8× higher. The optimal bit width depends on the target FPGA's BRAM/URAM budget.
+
+### Metrics summary
+
+| Metric | Requires | What it tells you |
+|--------|----------|-------------------|
+| **Fill rate** | Rules only | Fraction of bloom filter slots set to 1 — baseline collision density |
+| **Rule collisions** | Rules only | Number of address-space collisions between distinct rules |
+| **Per-lane FP rate** | Rules + Packets | Per extraction-offset false hit rate — reveals position-dependent traffic bias |
+| **Per-packet FP rate** | Rules + Packets | Fraction of packets with ≥1 false hit across all 57 lanes — the end metric for IPS throughput impact |
+
 ## Architecture Notes
 
 ### Hardware prefilter design
