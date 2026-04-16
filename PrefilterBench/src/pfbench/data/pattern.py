@@ -35,8 +35,6 @@ def load_json_export(path: Path) -> list[RulePattern]:
     for record in data:
         raw = bytes.fromhex(record["pattern_hex"])
         if len(raw) != ANCHOR_SIZE:
-            raise ValueError(
-                f"Pattern must be {ANCHOR_SIZE} bytes, got {len(raw)}"
-            )
+            raise ValueError(f"Pattern must be {ANCHOR_SIZE} bytes, got {len(raw)}")
         patterns.append(RulePattern(offset=record["offset"], pattern=raw))
     return patterns
