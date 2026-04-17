@@ -2,7 +2,7 @@ import struct
 import tempfile
 from pathlib import Path
 
-from pfbench.data.packet import load_pcap
+from pfbench.data.packet import load_pcap, load_pcap_dir
 
 
 def _write_pcap(path: Path, packets: list[bytes]):
@@ -121,3 +121,29 @@ class TestLoadPcap:
 
         packets = list(load_pcap(pcap_path))
         assert len(packets) == 5
+
+
+class TestLoadPcapDir:
+    def test_yields_per_file(self, tmp_path):
+        for name in ["alpha", "beta", "gamma"]:
+            frame = _make_eth_ip_tcp(name.encode().ljust(20, b"\x00"))
+            _write_pcap(tmp_path / f"{name}.pcap", [frame])
+
+        entries = list(load_pcap_dir(tmp_path))
+        assert len(entries) == 3
+        stems = [stem for stem, _ in entries]
+        assert stems == ["alpha", "beta", "gamma"]  # sorted
+        for _, pkts in entries:
+            assert len(pkts) == 1
+
+    def test_empty_dir(self, tmp_path):
+        assert list(load_pcap_dir(tmp_path)) == []
+
+    def test_ignores_non_pcap(self, tmp_path):
+        (tmp_path / "readme.txt").write_text("not a pcap")
+        frame = _make_eth_ip_tcp(b"real data here!!!!!!")
+        _write_pcap(tmp_path / "capture.pcap", [frame])
+
+        entries = list(load_pcap_dir(tmp_path))
+        assert len(entries) == 1
+        assert entries[0][0] == "capture"
