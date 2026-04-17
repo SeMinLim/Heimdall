@@ -102,13 +102,14 @@ class TestBatchPerPcap:
 
         summary = run_batch_experiment(config)
 
-        assert summary["batch_mode"] == "per_pcap"
-        assert summary["total_pcaps"] == 3
+        assert summary["inputs"]["batch_mode"] == "per_pcap"
+        assert summary["inputs"]["pcap_count"] == 3
         assert len(summary["per_pcap"]) == 3
-        assert "mean_fp_rate" in summary
-        assert "max_fp_rate" in summary
-        # summary.json written
+        assert "packet_weighted_mean_fp_rate" in summary["headline"]
+        assert "arithmetic_mean_fp_rate" in summary["headline"]
+        assert "max_fp_rate" in summary["headline"]
         assert (tmp_path / "out" / "summary.json").exists()
+        assert (tmp_path / "out" / "per_pcap_fp_hist.png").exists()
 
     def test_per_pcap_subdirectories(self, tmp_path):
         rules_file, pcap_dir = _make_pcap_dir(tmp_path, n_files=2)
@@ -125,15 +126,15 @@ class TestBatchPerPcap:
 
         run_batch_experiment(config)
 
-        # Each PCAP gets its own subdirectory with metrics + plots
         for stem in ["capture_000", "capture_001"]:
             sub = tmp_path / "out" / stem
             assert sub.exists()
             assert (sub / "metrics.json").exists()
             assert any(sub.glob("*.png"))
 
-    def test_fill_rate_same_across_pcaps(self, tmp_path):
-        rules_file, pcap_dir = _make_pcap_dir(tmp_path, n_files=3)
+    def test_weighted_mean_matches_uniform_case(self, tmp_path):
+        """When all PCAPs have equal packet counts, weighted mean == arithmetic mean."""
+        rules_file, pcap_dir = _make_pcap_dir(tmp_path, n_files=3, pkts_per_file=2)
         config = BatchConfig(
             hash_fn="crc32",
             reduce_fn="truncate",
@@ -146,9 +147,10 @@ class TestBatchPerPcap:
         )
 
         summary = run_batch_experiment(config)
-
-        fill_rates = {r["fill_rate"] for r in summary["per_pcap"]}
-        assert len(fill_rates) == 1  # same bloom filter → same fill rate
+        h = summary["headline"]
+        assert (
+            abs(h["packet_weighted_mean_fp_rate"] - h["arithmetic_mean_fp_rate"]) < 1e-8
+        )
 
 
 class TestBatchMerged:
@@ -167,10 +169,10 @@ class TestBatchMerged:
 
         result = run_batch_experiment(config)
 
-        assert result["total_pcaps"] == 3
-        assert result["total_packets"] == 12  # 3 files × 4 packets
-        assert isinstance(result["per_packet_fp_rate"], float)
-        assert isinstance(result["fill_rate"], float)
+        assert result["inputs"]["pcap_count"] == 3
+        assert result["inputs"]["packets_count"] == 12
+        assert isinstance(result["metrics"]["per_packet_fp_rate"], float)
+        assert isinstance(result["metrics"]["fill_rate"], float)
 
     def test_merged_writes_metrics(self, tmp_path):
         rules_file, pcap_dir = _make_pcap_dir(tmp_path)
@@ -191,7 +193,6 @@ class TestBatchMerged:
         assert any((tmp_path / "out").glob("*.png"))
 
     def test_merged_packet_count_matches_sum(self, tmp_path):
-        """Merged packet count == sum of all per-file packets."""
         rules_file, pcap_dir = _make_pcap_dir(tmp_path, n_files=5, pkts_per_file=3)
         config = BatchConfig(
             hash_fn="crc32",
@@ -205,7 +206,7 @@ class TestBatchMerged:
         )
 
         result = run_batch_experiment(config)
-        assert result["total_packets"] == 15
+        assert result["inputs"]["packets_count"] == 15
 
 
 class TestBatchEmpty:
@@ -227,7 +228,7 @@ class TestBatchEmpty:
         )
 
         summary = run_batch_experiment(config)
-        assert summary["total_pcaps"] == 0
+        assert summary["inputs"]["pcap_count"] == 0
         assert summary["per_pcap"] == []
 
     def test_empty_dir_merged(self, tmp_path):
@@ -248,6 +249,30 @@ class TestBatchEmpty:
         )
 
         result = run_batch_experiment(config)
-        assert result["total_pcaps"] == 0
-        assert result["total_packets"] == 0
-        assert result["per_packet_fp_rate"] == 0.0
+        assert result["inputs"]["pcap_count"] == 0
+        assert result["inputs"]["packets_count"] == 0
+        assert result["metrics"]["per_packet_fp_rate"] == 0.0
+
+
+class TestBatchSelfDescribing:
+    def test_report_has_config_and_provenance(self, tmp_path):
+        rules_file, pcap_dir = _make_pcap_dir(tmp_path, n_files=2)
+        config = BatchConfig(
+            hash_fn="crc32",
+            reduce_fn="truncate",
+            address_bits=10,
+            rules_path=rules_file,
+            rules_format="hex_list",
+            pcap_dir=pcap_dir,
+            output_dir=tmp_path / "out",
+            batch_mode="merged",
+        )
+        result = run_batch_experiment(config)
+
+        assert result["config"]["hash_fn"] == "crc32"
+        assert result["config"]["address_bits"] == 10
+        assert "timestamp_utc" in result["provenance"]
+        assert "summary" in result
+        assert "per_lane_fp" in result["summary"]
+        assert "occupancy" in result["summary"]
+        assert "theoretical_fp_lower_bound" in result["headline"]

@@ -28,14 +28,21 @@ def test_smoke_synthetic(tmp_path):
 
     result = run_experiment(config)
 
-    # Check that metrics are present
-    assert "fill_rate" in result
-    assert "rule_collisions" in result
-    assert "per_lane_fp_rates" in result
-    assert "per_packet_fp_rate" in result
-    assert isinstance(result["per_packet_fp_rate"], float)
-    assert isinstance(result["fill_rate"], float)
-    assert len(result["per_lane_fp_rates"]) == 57
+    # New self-describing structure
+    assert "config" in result
+    assert "provenance" in result
+    assert "headline" in result
+    assert "metrics" in result
+    assert "summary" in result
+
+    metrics = result["metrics"]
+    assert "fill_rate" in metrics
+    assert "rule_collisions" in metrics
+    assert "per_lane_fp_rates" in metrics
+    assert "per_packet_fp_rate" in metrics
+    assert isinstance(metrics["per_packet_fp_rate"], float)
+    assert isinstance(metrics["fill_rate"], float)
+    assert len(metrics["per_lane_fp_rates"]) == 57
 
     # Check output directory was created with plots
     output_dir = tmp_path / "results"
@@ -60,4 +67,4 @@ def test_smoke_ascii_traffic(tmp_path):
     )
 
     result = run_experiment(config)
-    assert 0.0 <= result["per_packet_fp_rate"] <= 1.0
+    assert 0.0 <= result["metrics"]["per_packet_fp_rate"] <= 1.0

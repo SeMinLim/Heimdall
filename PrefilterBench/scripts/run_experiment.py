@@ -71,19 +71,29 @@ def main():
         result = run_batch_experiment(config)
 
         if args.batch_mode == "merged":
+            inp = result["inputs"]
+            h = result["headline"]
+            print(f"Total PCAPs: {inp['pcap_count']}, packets: {inp['packets_count']}")
+            print(f"Fill rate: {h['fill_rate']:.6f}")
+            print(f"Per-packet FP rate: {h['per_packet_fp_rate']:.6f}")
             print(
-                f"Total PCAPs: {result['total_pcaps']}, packets: {result['total_packets']}"
+                f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}  "
+                f"(overhead ×{h['fp_overhead_vs_theoretical']})"
+                if h.get("fp_overhead_vs_theoretical") is not None
+                else f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}"
             )
-            print(f"Fill rate: {result['fill_rate']:.6f}")
-            print(f"Per-packet FP rate: {result['per_packet_fp_rate']:.6f}")
         else:
-            print(f"Total PCAPs: {result['total_pcaps']}")
-            print(f"Fill rate: {result['fill_rate']:.6f}")
-            print(f"Mean FP rate: {result['mean_fp_rate']:.6f}")
-            print(f"Max FP rate: {result['max_fp_rate']:.6f}")
+            inp = result["inputs"]
+            h = result["headline"]
+            print(f"Total PCAPs: {inp['pcap_count']}, packets: {inp['total_packets']}")
+            print(f"Fill rate: {h['fill_rate']:.6f}")
             print(
-                f"Nonzero FP PCAPs: {result['nonzero_fp_count']}/{result['total_pcaps']}"
+                f"Packet-weighted mean FP rate: {h['packet_weighted_mean_fp_rate']:.6f}"
             )
+            print(f"Arithmetic mean FP rate:      {h['arithmetic_mean_fp_rate']:.6f}")
+            print(f"Max FP rate: {h['max_fp_rate']:.6f}")
+            print(f"Nonzero FP PCAPs: {h['nonzero_fp_pcap_count']}/{inp['pcap_count']}")
+            print(f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}")
         print(f"Results saved to: {args.output}")
         return
 
@@ -103,9 +113,13 @@ def main():
 
     print(f"Running experiment: {args.hash} + {args.reduce} @ {args.bits} bits")
     result = run_experiment(config)
-    print(f"Fill rate: {result['fill_rate']:.6f}")
-    print(f"Per-packet FP rate: {result['per_packet_fp_rate']:.6f}")
-    print(f"Rule collisions: {result['rule_collisions']}")
+    h = result["headline"]
+    print(f"Fill rate: {h['fill_rate']:.6f}")
+    print(f"Per-packet FP rate: {h['per_packet_fp_rate']:.6f}")
+    print(f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}")
+    if h.get("fp_overhead_vs_theoretical") is not None:
+        print(f"  overhead factor: ×{h['fp_overhead_vs_theoretical']}")
+    print(f"Rule collisions: {h['rule_collisions']}")
     print(f"Results saved to: {args.output}")
 
 
