@@ -1,0 +1,21 @@
+[project]
+name = "pfbench"
+version = "0.1.0"
+description = "Offline prefilter benchmark for IPS pattern collision analysis"
+requires-python = ">=3.13"
+dependencies = [
+    "crcmod",
+    "numpy",
+    "matplotlib",
+    "pyyaml",
+    "dpkt",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pfbench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
