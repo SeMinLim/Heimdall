@@ -25,7 +25,7 @@ modeling parameter for offline analysis:
 
 from __future__ import annotations
 
-from pfbench.constants import ANCHOR_SIZE, PAYLOAD_SIZE, Packet
+from pfbench.constants import ANCHOR_SIZE, PAYLOAD_SIZE, Window
 
 WindowModel = str  # "first" | "tile64" | "slide57"
 WINDOW_MODELS: tuple[str, ...] = ("first", "tile64", "slide57")
@@ -35,7 +35,7 @@ def _pad(chunk: bytes) -> bytes:
     return chunk.ljust(PAYLOAD_SIZE, b"\x00")
 
 
-def windowize(payload: bytes, length: int, model: str) -> list[Packet]:
+def windowize(payload: bytes, length: int, model: str) -> list[Window]:
     """Decompose *payload[:length]* into 64 B windows per *model*.
 
     ``payload`` may be longer than ``length``; only the first ``length`` bytes
@@ -52,7 +52,7 @@ def windowize(payload: bytes, length: int, model: str) -> list[Packet]:
         return [(_pad(raw[:PAYLOAD_SIZE]), min(length, PAYLOAD_SIZE))]
 
     if model == "tile64":
-        out: list[Packet] = []
+        out: list[Window] = []
         for start in range(0, length, PAYLOAD_SIZE):
             chunk = raw[start : start + PAYLOAD_SIZE]
             out.append((_pad(chunk), len(chunk)))

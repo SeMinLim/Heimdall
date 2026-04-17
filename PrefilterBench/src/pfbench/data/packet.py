@@ -5,18 +5,18 @@ from pathlib import Path
 
 import dpkt
 
-from pfbench.constants import PAYLOAD_SIZE, Packet
+from pfbench.constants import PAYLOAD_SIZE, Window
 
 
 def load_pcap_dir(
     directory: Path,
-) -> Iterator[tuple[str, list[Packet]]]:
+) -> Iterator[tuple[str, list[Window]]]:
     """Yield ``(stem, packets)`` for each ``.pcap`` file in *directory*."""
     for pcap_path in sorted(directory.glob("*.pcap")):
         yield pcap_path.stem, list(load_pcap(pcap_path))
 
 
-def load_pcap(path: Path) -> Iterator[Packet]:
+def load_pcap(path: Path) -> Iterator[Window]:
     with open(path, "rb") as f:
         reader = dpkt.pcap.Reader(f)
         for _, buf in reader:

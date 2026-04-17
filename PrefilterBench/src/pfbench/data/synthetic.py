@@ -3,24 +3,24 @@
 import random
 from collections.abc import Iterator
 
-from pfbench.constants import PAYLOAD_SIZE, Packet
+from pfbench.constants import PAYLOAD_SIZE, Window
 
 
-def uniform_packets(count: int, seed: int) -> Iterator[Packet]:
+def uniform_packets(count: int, seed: int) -> Iterator[Window]:
     rng = random.Random(seed)
     for _ in range(count):
         payload = bytes(rng.getrandbits(8) for _ in range(PAYLOAD_SIZE))
         yield payload, PAYLOAD_SIZE
 
 
-def ascii_packets(count: int, seed: int) -> Iterator[Packet]:
+def ascii_packets(count: int, seed: int) -> Iterator[Window]:
     rng = random.Random(seed)
     for _ in range(count):
         payload = bytes(rng.randint(0x20, 0x7E) for _ in range(PAYLOAD_SIZE))
         yield payload, PAYLOAD_SIZE
 
 
-def mixed_length_packets(count: int, short_ratio: float, seed: int) -> Iterator[Packet]:
+def mixed_length_packets(count: int, short_ratio: float, seed: int) -> Iterator[Window]:
     rng = random.Random(seed)
     for _ in range(count):
         if rng.random() < short_ratio:

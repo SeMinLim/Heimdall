@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from pfbench.constants import Packet
+from pfbench.constants import Window
 from pfbench.core import hash as hash_mod
 from pfbench.core import reduce as reduce_mod
 from pfbench.core.bloom import BloomFilter
@@ -107,7 +107,7 @@ def _config_to_dict(config) -> dict:
 def _compute_metrics(
     bf: BloomFilter,
     rules: list[RulePattern],
-    packets: list[Packet],
+    packets: list[Window],
     hash_fn: Callable[[bytes], int],
     reduce_fn: Callable[[int, int], int],
     bits: int,
@@ -135,7 +135,7 @@ def _compute_metrics(
 def _build_report(
     config,
     rules: list[RulePattern],
-    packets: list[Packet],
+    packets: list[Window],
     metrics: dict,
     inputs_extra: dict | None = None,
 ) -> dict:
@@ -255,7 +255,7 @@ def run_batch_experiment(config: BatchConfig) -> dict:
     pcap_entries = list(load_pcap_dir(config.pcap_dir))
 
     if config.batch_mode == "merged":
-        all_packets: list[Packet] = []
+        all_packets: list[Window] = []
         for _, pkts in pcap_entries:
             all_packets.extend(pkts)
         metrics, addresses_by_lane = _compute_metrics(

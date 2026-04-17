@@ -5,7 +5,7 @@ from typing import Callable
 
 import numpy as np
 
-from pfbench.constants import NUM_LANES, Packet
+from pfbench.constants import NUM_LANES, Window
 from pfbench.core.bloom import BloomFilter
 from pfbench.data.anchor import extract_anchors
 
@@ -29,7 +29,7 @@ def rule_collision_count(
 
 def per_lane_fp_rates(
     bf: BloomFilter,
-    packets: list[Packet],
+    packets: list[Window],
 ) -> list[float]:
     hits = [0] * NUM_LANES
     counts = [0] * NUM_LANES
@@ -44,7 +44,7 @@ def per_lane_fp_rates(
 
 def per_packet_fp_rate(
     bf: BloomFilter,
-    packets: list[Packet],
+    packets: list[Window],
 ) -> float:
     if not packets:
         return 0.0
