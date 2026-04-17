@@ -131,11 +131,50 @@ Each experiment writes to the specified output directory:
 
 ```
 results/
-├── metrics.json         # machine-readable metrics summary
-├── bit_bias.png         # lane × bit position bias heatmap
-├── occupancy_stripe.png # lane × address bin hit heatmap
-└── mi_matrix.png        # pairwise bit mutual information
+├── metrics.json         # self-describing report (see structure below)
+├── bit_bias.png         # lane × bit position bias heatmap (auto-zoomed, diverging)
+├── occupancy_stripe.png # lane × address bin hit heatmap (log scale)
+└── mi_matrix.png        # pairwise bit mutual information (diagonal masked)
 ```
+
+Batch runs (`--packets` = directory) additionally produce:
+- `summary.json` — batch-level headline + per-PCAP table (per-PCAP mode)
+- `per_pcap_fp_hist.png` — distribution of per-PCAP FP rates (per-PCAP mode)
+- one subdirectory per PCAP with its own `metrics.json` + plots (per-PCAP mode)
+
+### `metrics.json` structure
+
+Every report is self-describing — it carries the full config, provenance, and
+human-readable summary stats so results can be interpreted without any external
+context:
+
+```jsonc
+{
+  "config":    { "hash_fn": "crc32", "reduce_fn": "truncate", "address_bits": 19, ... },
+  "provenance": { "timestamp_utc": "...", "git_sha": "...", "pfbench_version": "...",
+                  "python_version": "...", "platform": "..." },
+  "inputs":    { "rules_count": 500, "packets_count": 13843, ... },
+  "headline":  {
+    "fill_rate": 0.000954,
+    "per_packet_fp_rate": 0.0614,
+    "theoretical_fp_lower_bound": 0.0529,      // 1 - (1-fill)^57
+    "fp_overhead_vs_theoretical": 1.16,        // observed / lower bound
+    "rule_collisions": 0
+  },
+  "metrics":   { "fill_rate": ..., "per_lane_fp_rates": [...57 floats...], ... },
+  "summary":   {
+    "per_lane_fp": { "mean": ..., "std": ..., "max": ..., "argmax_lane": 4,
+                     "top3_lanes": [[4, 0.0038], ...] },
+    "occupancy":   { "total_slots": 524288, "nonzero_slots": 247774,
+                     "max_hits": 8314, "p50_hits_nonzero": 1, "p95_hits_nonzero": 5,
+                     "top_k_addrs": [[188265, 8314], ...] }
+  }
+}
+```
+
+The `headline` block is the primary thing to read; `summary` answers "which lane
+is worst?" and "how skewed is the address space?" without ever dumping the raw
+524K-slot occupancy array.
 
 ## Experiment Design
 
