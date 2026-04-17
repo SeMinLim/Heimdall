@@ -4,6 +4,7 @@
 import argparse
 from pathlib import Path
 
+from pfbench.data.windows import WINDOW_MODELS
 from pfbench.experiment import (
     ExperimentConfig,
     BatchConfig,
@@ -40,6 +41,16 @@ def main():
         help="Batch mode when --packets is a directory (default: per_pcap)",
     )
     parser.add_argument(
+        "--window-model",
+        choices=list(WINDOW_MODELS),
+        default="tile64",
+        help=(
+            "How to decompose packet payload into 64B HW windows: "
+            "'first' (legacy, first 64B only), 'tile64' (non-overlap, default), "
+            "'slide57' (57B stride overlap to cover cross-beat 8B anchors)."
+        ),
+    )
+    parser.add_argument(
         "--output", type=Path, default=Path("experiments/results/default")
     )
     args = parser.parse_args()
@@ -62,10 +73,11 @@ def main():
             pcap_dir=packets_path,
             output_dir=args.output,
             batch_mode=args.batch_mode,
+            window_model=args.window_model,
         )
 
         print(
-            f"Batch experiment ({args.batch_mode}): {args.hash} + {args.reduce} @ {args.bits} bits"
+            f"Batch experiment ({args.batch_mode}): {args.hash} + {args.reduce} @ {args.bits} bits  [window={args.window_model}]"
         )
         print(f"PCAP directory: {packets_path}")
         result = run_batch_experiment(config)
@@ -75,6 +87,7 @@ def main():
             h = result["headline"]
             print(f"Total PCAPs: {inp['pcap_count']}, packets: {inp['packets_count']}")
             print(f"Fill rate: {h['fill_rate']:.6f}")
+            print(f"Per-window FP rate: {h['per_window_fp_rate']:.6f}")
             print(f"Per-packet FP rate: {h['per_packet_fp_rate']:.6f}")
             print(
                 f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}  "
@@ -109,12 +122,16 @@ def main():
         packet_seed=args.packet_seed,
         short_ratio=args.short_ratio,
         output_dir=args.output,
+        window_model=args.window_model,
     )
 
-    print(f"Running experiment: {args.hash} + {args.reduce} @ {args.bits} bits")
+    print(
+        f"Running experiment: {args.hash} + {args.reduce} @ {args.bits} bits  [window={args.window_model}]"
+    )
     result = run_experiment(config)
     h = result["headline"]
     print(f"Fill rate: {h['fill_rate']:.6f}")
+    print(f"Per-window FP rate: {h['per_window_fp_rate']:.6f}")
     print(f"Per-packet FP rate: {h['per_packet_fp_rate']:.6f}")
     print(f"Theoretical lower bound: {h['theoretical_fp_lower_bound']:.6f}")
     if h.get("fp_overhead_vs_theoretical") is not None:
