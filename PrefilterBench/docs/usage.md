@@ -116,7 +116,22 @@ uv run python scripts/run_experiment.py \
 | `--packet-count` | int | Number of synthetic packets |
 | `--packet-seed` | int | RNG seed for synthetic traffic |
 | `--short-ratio` | float | Short packet fraction (for `synthetic_mixed`) |
+| `--window-model` | `first`, `tile64`, `slide57` | How payload is decomposed into 64 B HW windows (default `tile64`) |
 | `--output` | path | Output directory for results and plots |
+
+### Window model (payload decomposition)
+
+The hardware receives each packet as a stream of **512-bit (64 B) beats** — one beat per cycle. The prefilter extracts 57 overlapping 8 B anchors **within each beat**. A packet of `L` bytes produces `ceil(L / 64)` beats.
+
+`--window-model` controls how PrefilterBench replays this beat stream from a payload:
+
+| Model | Behavior | Windows per packet | Use when |
+|---|---|---|---|
+| `first` | Legacy: first 64 B only. | 1 | Backward compatibility, fast prototyping |
+| `tile64` | **Default.** Non-overlapping 64 B tiles covering the full payload. Last tile is zero-padded to 64 B. | `ceil(L/64)` | Default for full-payload FP measurement — mirrors HW beat boundaries exactly |
+| `slide57` | 57 B stride overlap. Captures 8 B anchors that straddle two HW beats. | `max(1, ceil((L-8+1)/57))` (approx) | Upper-bound FP: every possible 8 B substring is reachable at some offset |
+
+**NOTE:** Measuring only the first 64 B (`first`) misses false positives on any data past byte 64 - which is most of real IPS traffic. `tile64` measures the same FP events the HW would see, at the same beat granularity. `slide57` additionally catches anchors that cross the boundary between two hardware beats (lost by `tile64` because the HW's intra-beat 0–56 anchor window cannot span beats).
 
 ### Reduction Strategies
 
@@ -153,12 +168,14 @@ context:
   "config":    { "hash_fn": "crc32", "reduce_fn": "truncate", "address_bits": 19, ... },
   "provenance": { "timestamp_utc": "...", "git_sha": "...", "pfbench_version": "...",
                   "python_version": "...", "platform": "..." },
-  "inputs":    { "rules_count": 500, "packets_count": 13843, ... },
+  "inputs":    { "rules_count": 500, "packets_count": 13843, "windows_count": 82451, "window_model": "tile64", ... },
   "headline":  {
     "fill_rate": 0.000954,
-    "per_packet_fp_rate": 0.0614,
-    "theoretical_fp_lower_bound": 0.0529,      // 1 - (1-fill)^57
-    "fp_overhead_vs_theoretical": 1.16,        // observed / lower bound
+    "per_window_fp_rate": 0.0417,              // fraction of 64B HW windows with any hit
+    "per_packet_fp_rate": 0.0614,              // fraction of wire packets with any window hit
+    "theoretical_fp_lower_bound": 0.0529,      // 1 - (1-fill)^57 (per-window)
+    "window_fp_overhead_vs_theoretical": 0.79, // per_window_fp_rate / lower_bound
+    "fp_overhead_vs_theoretical": 1.16,        // per_packet_fp_rate / lower_bound (legacy)
     "rule_collisions": 0
   },
   "metrics":   { "fill_rate": ..., "per_lane_fp_rates": [...57 floats...], ... },
@@ -216,20 +233,21 @@ At 4K rules, fill rates are roughly 8× higher. The optimal bit width depends on
 | **Fill rate** | Rules only | Fraction of bloom filter slots set to 1 — baseline collision density |
 | **Rule collisions** | Rules only | Number of address-space collisions between distinct rules |
 | **Per-lane FP rate** | Rules + Packets | Per extraction-offset false hit rate — reveals position-dependent traffic bias |
-| **Per-packet FP rate** | Rules + Packets | Fraction of packets with ≥1 false hit across all 57 lanes — the end metric for IPS throughput impact |
+| **Per-window FP rate** | Rules + Packets | Fraction of 64 B HW windows with ≥1 false hit — the direct per-beat signal the HW produces |
+| **Per-packet FP rate** | Rules + Packets | Fraction of wire packets with ≥1 false hit across **any** window — the end metric for IPS throughput impact |
 
 ## Architecture Notes
 
 ### Hardware prefilter design
 
-The Heimdall hardware prefilter extracts up to **57 overlapping 8-byte anchors** from each incoming packet's application-layer payload (sliding window at offsets 0–56). Every anchor is looked up in a bloom filter to decide whether the packet might match any IPS rule.
+The Heimdall hardware prefilter receives each packet as a stream of **512-bit (64 B) beats**. For every beat it extracts up to **57 overlapping 8-byte anchors** (sliding window at intra-beat offsets 0–56). Every anchor is looked up in a bloom filter to decide whether the beat might match any IPS rule. A packet of length `L` produces `ceil(L/64)` beats, each independently inspected.
 
 To perform all 57 lookups in a single cycle, the hardware physically **replicates the bloom filter 57 times** — one copy per extraction lane. All 57 copies are **identical**: every rule pattern's hash address is written to every copy during the offline programming phase. The replication is purely a throughput optimization; logically there is one shared filter.
 
 ### What PrefilterBench models
 
-Since all 57 hardware copies contain the same bits, PrefilterBench maintains **a single bloom filter** (one bit array of $2^N$ slots). All selected rule patterns(substrings) are inserted into this one filter, and all 57 packet anchors are queried against it.
+Since all 57 hardware copies contain the same bits, PrefilterBench maintains **a single bloom filter** (one bit array of $2^N$ slots). All selected rule patterns (substrings) are inserted into this one filter, and the 57 intra-window anchors of every 64 B window are queried against it.
 
 - **Rule insertion**: `hash(pattern) → addr`, set `filter[addr] = 1`. The `offset` field from PatternSelector records where the 8-byte window was selected within the 64-byte rule record; it is stored for traceability but does not affect the bloom filter.
-- **Packet query**: For each packet, extract anchors at offsets 0 through `min(payload_len - 8, 56)`. Each anchor is hashed and looked up in the same filter. A packet is flagged if **any** anchor matches.
-- **Application-layer payload**: PCAP packets are stripped to their application-layer payload (past Ethernet / IP / TCP-UDP headers) before anchor extraction.
+- **Packet query**: The payload is first split into 64 B windows according to `--window-model`. Inside each window, anchors are extracted at offsets `0 .. min(valid_len - 8, 56)`. Each anchor is hashed and looked up in the filter. A window is flagged if **any** anchor matches; a wire packet is flagged if **any** of its windows is flagged.
+- **Application-layer payload**: PCAP packets are stripped to their application-layer payload (past Ethernet / IP / TCP-UDP headers) before windowization.
