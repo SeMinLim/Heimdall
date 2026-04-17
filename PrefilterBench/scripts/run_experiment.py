@@ -4,7 +4,12 @@
 import argparse
 from pathlib import Path
 
-from pfbench.experiment import ExperimentConfig, BatchConfig, run_experiment, run_batch_experiment
+from pfbench.experiment import (
+    ExperimentConfig,
+    BatchConfig,
+    run_experiment,
+    run_batch_experiment,
+)
 
 
 def main():
@@ -39,9 +44,12 @@ def main():
     )
     args = parser.parse_args()
 
-    packets_path = Path(args.packets) if args.packets not in {
-        "synthetic_uniform", "synthetic_ascii", "synthetic_mixed"
-    } else None
+    packets_path = (
+        Path(args.packets)
+        if args.packets
+        not in {"synthetic_uniform", "synthetic_ascii", "synthetic_mixed"}
+        else None
+    )
 
     # Directory of PCAPs → batch mode
     if packets_path and packets_path.is_dir():
@@ -56,12 +64,16 @@ def main():
             batch_mode=args.batch_mode,
         )
 
-        print(f"Batch experiment ({args.batch_mode}): {args.hash} + {args.reduce} @ {args.bits} bits")
+        print(
+            f"Batch experiment ({args.batch_mode}): {args.hash} + {args.reduce} @ {args.bits} bits"
+        )
         print(f"PCAP directory: {packets_path}")
         result = run_batch_experiment(config)
 
         if args.batch_mode == "merged":
-            print(f"Total PCAPs: {result['total_pcaps']}, packets: {result['total_packets']}")
+            print(
+                f"Total PCAPs: {result['total_pcaps']}, packets: {result['total_packets']}"
+            )
             print(f"Fill rate: {result['fill_rate']:.6f}")
             print(f"Per-packet FP rate: {result['per_packet_fp_rate']:.6f}")
         else:
@@ -69,7 +81,9 @@ def main():
             print(f"Fill rate: {result['fill_rate']:.6f}")
             print(f"Mean FP rate: {result['mean_fp_rate']:.6f}")
             print(f"Max FP rate: {result['max_fp_rate']:.6f}")
-            print(f"Nonzero FP PCAPs: {result['nonzero_fp_count']}/{result['total_pcaps']}")
+            print(
+                f"Nonzero FP PCAPs: {result['nonzero_fp_count']}/{result['total_pcaps']}"
+            )
         print(f"Results saved to: {args.output}")
         return
 

@@ -19,22 +19,52 @@ def _make_eth_ip_tcp(payload: bytes) -> bytes:
     eth = b"\x00" * 12 + b"\x08\x00"
     ip_hdr = bytes(
         [
-            0x45, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x40, 0x06, 0x00, 0x00,
-            0x0A, 0x00, 0x00, 0x01,
-            0x0A, 0x00, 0x00, 0x02,
+            0x45,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x40,
+            0x06,
+            0x00,
+            0x00,
+            0x0A,
+            0x00,
+            0x00,
+            0x01,
+            0x0A,
+            0x00,
+            0x00,
+            0x02,
         ]
     )
     total_len = 20 + 20 + len(payload)
     ip_hdr = ip_hdr[:2] + struct.pack(">H", total_len) + ip_hdr[4:]
     tcp_hdr = bytes(
         [
-            0x00, 0x50, 0x1F, 0x90,
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x00,
-            0x50, 0x02, 0xFF, 0xFF,
-            0x00, 0x00, 0x00, 0x00,
+            0x00,
+            0x50,
+            0x1F,
+            0x90,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x50,
+            0x02,
+            0xFF,
+            0xFF,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
         ]
     )
     return eth + ip_hdr + tcp_hdr + payload
@@ -49,8 +79,7 @@ def _make_pcap_dir(tmp_path: Path, n_files: int = 3, pkts_per_file: int = 2):
     pcap_dir.mkdir()
     for f_idx in range(n_files):
         frames = [
-            _make_eth_ip_tcp(bytes([f_idx * 10 + p]) * 30)
-            for p in range(pkts_per_file)
+            _make_eth_ip_tcp(bytes([f_idx * 10 + p]) * 30) for p in range(pkts_per_file)
         ]
         _write_pcap(pcap_dir / f"capture_{f_idx:03d}.pcap", frames)
 

@@ -1,7 +1,7 @@
 """Experiment orchestrator: configure, run, and record prefilter benchmarks."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -234,10 +234,7 @@ def run_batch_experiment(config: BatchConfig) -> dict:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     with open(config.output_dir / "summary.json", "w") as f:
         json.dump(
-            {
-                k: round(v, 8) if isinstance(v, float) else v
-                for k, v in summary.items()
-            },
+            {k: round(v, 8) if isinstance(v, float) else v for k, v in summary.items()},
             f,
             indent=2,
         )
