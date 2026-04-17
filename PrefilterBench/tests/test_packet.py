@@ -1,5 +1,4 @@
 import struct
-import tempfile
 from pathlib import Path
 
 from pfbench.data.packet import load_pcap, load_pcap_dir
@@ -83,44 +82,34 @@ class TestLoadPcap:
         pcap_path = tmp_path / "test.pcap"
         _write_pcap(pcap_path, [frame])
 
-        packets = list(load_pcap(pcap_path))
-        assert len(packets) == 1
-        buf, length = packets[0]
-        assert len(buf) == 64
-        assert length == len(payload)
-        assert buf[:length] == payload
+        payloads = list(load_pcap(pcap_path))
+        assert payloads == [payload]
 
-    def test_payload_truncated_to_64(self, tmp_path):
+    def test_long_payload_returned_intact(self, tmp_path):
         payload = bytes(range(256)) * 2  # 512 bytes
         frame = _make_eth_ip_tcp(payload)
         pcap_path = tmp_path / "test.pcap"
         _write_pcap(pcap_path, [frame])
 
-        packets = list(load_pcap(pcap_path))
-        buf, length = packets[0]
-        assert len(buf) == 64
-        assert length == 64  # capped at 64
-        assert buf == payload[:64]
+        payloads = list(load_pcap(pcap_path))
+        assert payloads == [payload]  # no truncation at the IO layer
 
-    def test_short_payload_zero_padded(self, tmp_path):
-        payload = b"Hi"
-        frame = _make_eth_ip_tcp(payload)
+    def test_zero_length_payload_skipped(self, tmp_path):
+        frame = _make_eth_ip_tcp(b"")
         pcap_path = tmp_path / "test.pcap"
         _write_pcap(pcap_path, [frame])
 
-        packets = list(load_pcap(pcap_path))
-        buf, length = packets[0]
-        assert length == 2
-        assert buf[:2] == b"Hi"
-        assert buf[2:] == bytes(62)
+        assert list(load_pcap(pcap_path)) == []
 
     def test_multiple_packets(self, tmp_path):
         frames = [_make_eth_ip_tcp(bytes([i]) * 30) for i in range(5)]
         pcap_path = tmp_path / "test.pcap"
         _write_pcap(pcap_path, frames)
 
-        packets = list(load_pcap(pcap_path))
-        assert len(packets) == 5
+        payloads = list(load_pcap(pcap_path))
+        assert len(payloads) == 5
+        for i, p in enumerate(payloads):
+            assert p == bytes([i]) * 30
 
 
 class TestLoadPcapDir:
@@ -133,8 +122,8 @@ class TestLoadPcapDir:
         assert len(entries) == 3
         stems = [stem for stem, _ in entries]
         assert stems == ["alpha", "beta", "gamma"]  # sorted
-        for _, pkts in entries:
-            assert len(pkts) == 1
+        for _, payloads in entries:
+            assert len(payloads) == 1
 
     def test_empty_dir(self, tmp_path):
         assert list(load_pcap_dir(tmp_path)) == []

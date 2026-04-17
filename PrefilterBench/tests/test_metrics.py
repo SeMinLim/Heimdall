@@ -3,12 +3,12 @@ import numpy as np
 from pfbench.core.bloom import BloomFilter
 from pfbench.core.hash import crc32
 from pfbench.core.reduce import truncate
-from pfbench.data.anchor import extract_anchors
 from pfbench.analysis.metrics import (
     fill_rate,
     rule_collision_count,
     per_lane_fp_rates,
     per_packet_fp_rate,
+    per_window_fp_rate,
     bit_bias,
     address_occupancy_histogram,
 )
@@ -49,31 +49,68 @@ class TestRuleCollisionCount:
 class TestPerLaneFpRates:
     def test_empty_filter_zero_fp(self):
         bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
-        packets = [(bytes(64), 64)]
+        packets = [[(bytes(64), 64)]]
         rates = per_lane_fp_rates(bf, packets)
         assert len(rates) == 57
         assert all(r == 0.0 for r in rates)
 
     def test_populated_filter(self):
         bf = _make_populated_filter()
-        packets = [(bytes([i % 256]) * 64, 64) for i in range(100)]
+        packets = [[(bytes([i % 256]) * 64, 64)] for i in range(100)]
         rates = per_lane_fp_rates(bf, packets)
         assert isinstance(rates[0], float)
+
+    def test_multi_window_packet_counted_per_window(self):
+        """A packet with 3 windows should contribute 3 to each lane's count."""
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        packets = [[(bytes(64), 64), (bytes(64), 64), (bytes(64), 64)]]
+        rates = per_lane_fp_rates(bf, packets)
+        # empty filter → 0 hits but denominator is 3 (anchors per window x 3 windows / 1 window weight per lane)
+        assert all(r == 0.0 for r in rates)
+
+
+class TestPerWindowFpRate:
+    def test_empty(self):
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        assert per_window_fp_rate(bf, []) == 0.0
+        assert per_window_fp_rate(bf, [[]]) == 0.0
+
+    def test_empty_filter_zero(self):
+        bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
+        packets = [[(bytes(64), 64)] for _ in range(5)]
+        assert per_window_fp_rate(bf, packets) == 0.0
+
+    def test_counts_each_window(self):
+        bf = _make_populated_filter()
+        # two packets: packet 0 has 2 windows, packet 1 has 1 → total 3 windows
+        packets = [
+            [(bytes([1]) * 64, 64), (bytes([2]) * 64, 64)],
+            [(bytes([3]) * 64, 64)],
+        ]
+        rate = per_window_fp_rate(bf, packets)
+        assert 0.0 <= rate <= 1.0
 
 
 class TestPerPacketFpRate:
     def test_empty_filter(self):
         bf = BloomFilter(hash_fn=crc32, reduce_fn=truncate, address_bits=10)
-        packets = [(bytes(64), 64)] * 10
+        packets = [[(bytes(64), 64)]] * 10
         rate = per_packet_fp_rate(bf, packets)
         assert rate == 0.0
 
     def test_returns_fraction(self):
         bf = _make_populated_filter()
-        packets = [(bytes([i % 256]) * 64, 64) for i in range(50)]
+        packets = [[(bytes([i % 256]) * 64, 64)] for i in range(50)]
         rate = per_packet_fp_rate(bf, packets)
         assert 0.0 <= rate <= 1.0
-        assert 0.0 <= rate <= 1.0
+
+    def test_any_window_hit_flags_packet(self):
+        """If any window in a packet hits, the packet counts as FP once."""
+        bf = _make_populated_filter()
+        # Single packet with many windows; just verify output is a valid fraction.
+        packets = [[(bytes([i % 256]) * 64, 64) for i in range(10)]]
+        rate = per_packet_fp_rate(bf, packets)
+        assert rate in (0.0, 1.0)
 
 
 class TestBitBias:

@@ -12,12 +12,14 @@ from pfbench.core.bloom import BloomFilter
 from pfbench.data.pattern import RulePattern, load_hex_list, load_json_export
 from pfbench.data.anchor import extract_anchors
 from pfbench.data.synthetic import uniform_packets, ascii_packets, mixed_length_packets
+from pfbench.data.windows import WINDOW_MODELS, windowize
 from pfbench.provenance import provenance
 from pfbench.analysis.metrics import (
     fill_rate,
     rule_collision_count,
     per_lane_fp_rates,
     per_packet_fp_rate,
+    per_window_fp_rate,
     bit_bias,
     address_occupancy_histogram,
 )
@@ -44,6 +46,8 @@ REDUCE_FNS = {
     "xor_fold_16": reduce_mod.xor_fold_16,
 }
 
+DEFAULT_WINDOW_MODEL = "tile64"
+
 
 @dataclass
 class ExperimentConfig:
@@ -59,6 +63,7 @@ class ExperimentConfig:
     packet_count: int = 100
     packet_seed: int = 42
     short_ratio: float = 0.5
+    window_model: str = DEFAULT_WINDOW_MODEL
 
 
 @dataclass
@@ -71,6 +76,7 @@ class BatchConfig:
     pcap_dir: Path
     output_dir: Path
     batch_mode: str = "per_pcap"  # "per_pcap" or "merged"
+    window_model: str = DEFAULT_WINDOW_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -104,21 +110,48 @@ def _config_to_dict(config) -> dict:
     return {k: str(v) if isinstance(v, Path) else v for k, v in d.items()}
 
 
+def _payloads_to_packets(
+    payloads: list[bytes], window_model: str
+) -> list[list[Window]]:
+    """Decompose each L7 payload into a list of 64 B windows (one list per wire packet)."""
+    out: list[list[Window]] = []
+    for raw in payloads:
+        windows = windowize(raw, len(raw), window_model)
+        if windows:
+            out.append(windows)
+    return out
+
+
+def _synthetic_to_packets(windows: list[Window]) -> list[list[Window]]:
+    """Synthetic generators already yield one ≤ 64 B window per packet."""
+    return [[w] for w in windows]
+
+
+def _validate_window_model(model: str) -> None:
+    if model not in WINDOW_MODELS:
+        raise ValueError(
+            f"Unknown window_model {model!r}; expected one of {WINDOW_MODELS}"
+        )
+
+
 def _compute_metrics(
     bf: BloomFilter,
     rules: list[RulePattern],
-    packets: list[Window],
+    packets: list[list[Window]],
     hash_fn: Callable[[bytes], int],
     reduce_fn: Callable[[int, int], int],
     bits: int,
 ) -> tuple[dict, dict[int, list[int]]]:
     """Compute all metrics. Returns (metrics_dict, addresses_by_lane)."""
     addresses_by_lane: dict[int, list[int]] = {}
-    for payload, length in packets:
-        anchors = extract_anchors(payload, length)
-        for lane, anchor in enumerate(anchors):
-            addr = reduce_fn(hash_fn(anchor), bits)
-            addresses_by_lane.setdefault(lane, []).append(addr)
+    window_count = 0
+    for windows in packets:
+        for payload, length in windows:
+            window_count += 1
+            anchors = extract_anchors(payload, length)
+            for lane, anchor in enumerate(anchors):
+                addr = reduce_fn(hash_fn(anchor), bits)
+                addresses_by_lane.setdefault(lane, []).append(addr)
 
     metrics = {
         "fill_rate": fill_rate(bf),
@@ -127,7 +160,9 @@ def _compute_metrics(
         ),
         "per_lane_fp_rates": per_lane_fp_rates(bf, packets),
         "per_packet_fp_rate": per_packet_fp_rate(bf, packets),
+        "per_window_fp_rate": per_window_fp_rate(bf, packets),
         "address_occupancy": address_occupancy_histogram(addresses_by_lane, bits),
+        "_window_count": window_count,
     }
     return metrics, addresses_by_lane
 
@@ -135,18 +170,21 @@ def _compute_metrics(
 def _build_report(
     config,
     rules: list[RulePattern],
-    packets: list[Window],
+    packets: list[list[Window]],
     metrics: dict,
     inputs_extra: dict | None = None,
 ) -> dict:
     """Assemble a self-describing JSON report from metrics + config."""
     fr = metrics["fill_rate"]
     ppfp = metrics["per_packet_fp_rate"]
+    pwfp = metrics["per_window_fp_rate"]
     lower = theoretical_fp_lower_bound(fr)
 
     inputs = {
         "rules_count": len(rules),
         "packets_count": len(packets),
+        "windows_count": metrics["_window_count"],
+        "window_model": getattr(config, "window_model", DEFAULT_WINDOW_MODEL),
     }
     if inputs_extra:
         inputs.update(inputs_extra)
@@ -157,16 +195,18 @@ def _build_report(
         "inputs": inputs,
         "headline": {
             "fill_rate": round(fr, 10),
+            "per_window_fp_rate": round(pwfp, 8),
             "per_packet_fp_rate": round(ppfp, 8),
             "theoretical_fp_lower_bound": round(lower, 8),
-            "fp_overhead_vs_theoretical": (
-                round(ppfp / lower, 4) if lower > 0 else None
+            "window_fp_overhead_vs_theoretical": (
+                round(pwfp / lower, 4) if lower > 0 else None
             ),
             "rule_collisions": metrics["rule_collisions"],
         },
         "metrics": {
             "fill_rate": round(fr, 10),
             "rule_collisions": metrics["rule_collisions"],
+            "per_window_fp_rate": round(pwfp, 8),
             "per_packet_fp_rate": round(ppfp, 8),
             "per_lane_fp_rates": [round(x, 8) for x in metrics["per_lane_fp_rates"]],
         },
@@ -200,6 +240,7 @@ def _save_report(
 
 
 def run_experiment(config: ExperimentConfig) -> dict:
+    _validate_window_model(config.window_model)
     hash_fn = HASH_FNS[config.hash_fn]
     reduce_fn = REDUCE_FNS[config.reduce_fn]
     bits = config.address_bits
@@ -207,21 +248,28 @@ def run_experiment(config: ExperimentConfig) -> dict:
     rules = _load_rules(config.rules_path, config.rules_format)
     bf = _build_bloom_filter(rules, hash_fn, reduce_fn, bits)
 
-    # Load packets
+    # Load traffic and reshape to list[list[Window]].
     if config.packet_source == "synthetic_uniform":
-        packets = list(uniform_packets(config.packet_count, config.packet_seed))
+        packets = _synthetic_to_packets(
+            list(uniform_packets(config.packet_count, config.packet_seed))
+        )
     elif config.packet_source == "synthetic_ascii":
-        packets = list(ascii_packets(config.packet_count, config.packet_seed))
+        packets = _synthetic_to_packets(
+            list(ascii_packets(config.packet_count, config.packet_seed))
+        )
     elif config.packet_source == "synthetic_mixed":
-        packets = list(
-            mixed_length_packets(
-                config.packet_count, config.short_ratio, config.packet_seed
+        packets = _synthetic_to_packets(
+            list(
+                mixed_length_packets(
+                    config.packet_count, config.short_ratio, config.packet_seed
+                )
             )
         )
     else:
         from pfbench.data.packet import load_pcap
 
-        packets = list(load_pcap(Path(config.packet_source)))
+        payloads = list(load_pcap(Path(config.packet_source)))
+        packets = _payloads_to_packets(payloads, config.window_model)
 
     metrics, addresses_by_lane = _compute_metrics(
         bf, rules, packets, hash_fn, reduce_fn, bits
@@ -245,6 +293,7 @@ def run_experiment(config: ExperimentConfig) -> dict:
 def run_batch_experiment(config: BatchConfig) -> dict:
     from pfbench.data.packet import load_pcap_dir
 
+    _validate_window_model(config.window_model)
     hash_fn = HASH_FNS[config.hash_fn]
     reduce_fn = REDUCE_FNS[config.reduce_fn]
     bits = config.address_bits
@@ -252,10 +301,13 @@ def run_batch_experiment(config: BatchConfig) -> dict:
     rules = _load_rules(config.rules_path, config.rules_format)
     bf = _build_bloom_filter(rules, hash_fn, reduce_fn, bits)
 
-    pcap_entries = list(load_pcap_dir(config.pcap_dir))
+    pcap_entries: list[tuple[str, list[list[Window]]]] = [
+        (stem, _payloads_to_packets(payloads, config.window_model))
+        for stem, payloads in load_pcap_dir(config.pcap_dir)
+    ]
 
     if config.batch_mode == "merged":
-        all_packets: list[Window] = []
+        all_packets: list[list[Window]] = []
         for _, pkts in pcap_entries:
             all_packets.extend(pkts)
         metrics, addresses_by_lane = _compute_metrics(
@@ -296,7 +348,9 @@ def run_batch_experiment(config: BatchConfig) -> dict:
             {
                 "pcap": stem,
                 "packets": len(pkts),
+                "windows": metrics["_window_count"],
                 "per_packet_fp_rate": round(metrics["per_packet_fp_rate"], 8),
+                "per_window_fp_rate": round(metrics["per_window_fp_rate"], 8),
                 "max_lane_fp": round(max(metrics["per_lane_fp_rates"]), 8)
                 if metrics["per_lane_fp_rates"]
                 else 0.0,
@@ -304,7 +358,7 @@ def run_batch_experiment(config: BatchConfig) -> dict:
         )
         total_packets += len(pkts)
 
-    # Aggregate stats
+    # Aggregate stats (packet-weighted mean uses wire-packet counts as weights)
     fp_rates = [s["per_packet_fp_rate"] for s in per_pcap_summaries]
     pkt_counts = [s["packets"] for s in per_pcap_summaries]
     weighted_mean = (
@@ -325,6 +379,7 @@ def run_batch_experiment(config: BatchConfig) -> dict:
             "pcap_count": len(pcap_entries),
             "total_packets": total_packets,
             "batch_mode": "per_pcap",
+            "window_model": config.window_model,
         },
         "headline": {
             "fill_rate": fill_rate_val,

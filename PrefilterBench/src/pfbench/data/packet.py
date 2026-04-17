@@ -1,22 +1,29 @@
-"""PCAP ingestion: strip L2/L3/L4 headers, extract application-layer payload."""
+"""PCAP ingestion: strip L2/L3/L4 headers, yield raw L7 payload bytes.
+
+Frames that are not IPv4 + TCP/UDP and frames with zero-length L7 payloads
+are skipped silently.
+"""
 
 from collections.abc import Iterator
 from pathlib import Path
 
 import dpkt
 
-from pfbench.constants import PAYLOAD_SIZE, Window
+
+MAX_PAYLOAD_BYTES = 9018  # jumbo-frame ceiling; guards against pathological captures
 
 
-def load_pcap_dir(
-    directory: Path,
-) -> Iterator[tuple[str, list[Window]]]:
-    """Yield ``(stem, packets)`` for each ``.pcap`` file in *directory*."""
+def load_pcap_dir(directory: Path) -> Iterator[tuple[str, list[bytes]]]:
+    """Yield ``(stem, payloads)`` for each ``.pcap`` file in *directory*.
+
+    ``payloads`` is the list of raw L7 payload byte-strings, one per wire packet.
+    """
     for pcap_path in sorted(directory.glob("*.pcap")):
         yield pcap_path.stem, list(load_pcap(pcap_path))
 
 
-def load_pcap(path: Path) -> Iterator[Window]:
+def load_pcap(path: Path) -> Iterator[bytes]:
+    """Yield one raw L7 payload (``bytes``) per TCP/UDP-over-IPv4 frame."""
     with open(path, "rb") as f:
         reader = dpkt.pcap.Reader(f)
         for _, buf in reader:
@@ -30,16 +37,15 @@ def load_pcap(path: Path) -> Iterator[Window]:
             ip = eth.data
 
             transport = ip.data
-            if isinstance(transport, (dpkt.tcp.TCP, dpkt.udp.UDP)):
-                app_payload = transport.data
-            else:
+            if not isinstance(transport, (dpkt.tcp.TCP, dpkt.udp.UDP)):
                 continue
 
-            if isinstance(app_payload, bytes):
-                raw = app_payload
-            else:
-                raw = bytes(app_payload)
+            app_payload = transport.data
+            raw = app_payload if isinstance(app_payload, bytes) else bytes(app_payload)
+            if not raw:
+                continue
 
-            length = min(len(raw), PAYLOAD_SIZE)
-            padded = raw[:PAYLOAD_SIZE].ljust(PAYLOAD_SIZE, b"\x00")
-            yield padded, length
+            if len(raw) > MAX_PAYLOAD_BYTES:
+                raw = raw[:MAX_PAYLOAD_BYTES]
+
+            yield raw

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from pfbench.experiment import run_experiment, ExperimentConfig
 
