@@ -163,11 +163,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not parse builtins/*.rules.",
     )
-    snort.add_argument(
-        "--include-negated-content",
-        action="store_true",
-        help="Include !content literals as prefilter candidates.",
-    )
     snort.set_defaults(func=_run_compile_snort)
 
     return parser
@@ -214,7 +209,7 @@ def _run_compile_snort(args: argparse.Namespace) -> int:
         include_so_source=not args.no_so_source,
         include_so_stubs=not args.no_so_stubs,
         include_builtins=not args.no_builtins,
-        include_negated=args.include_negated_content,
+        anchor_n=args.window_size,
     )
     result = compile_ir(
         ir,

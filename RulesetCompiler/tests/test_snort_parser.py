@@ -19,7 +19,7 @@ class SnortParserTest(unittest.TestCase):
 
         self.assertEqual(tokens, ['msg:"a;b"', 'content:"abc;def"', "nocase"])
 
-    def test_parse_statement_extracts_positive_content_metadata(self):
+    def test_parse_statement_extracts_one_rule_anchor(self):
         ir = parse_snort_statements(
             [
                 'alert tcp any any -> any any (msg:"demo"; service:http; '
@@ -36,26 +36,30 @@ class SnortParserTest(unittest.TestCase):
         self.assertEqual(ir.rules[0].metadata["content_count"], 3)
         self.assertEqual(ir.rules[0].metadata["positive_content_count"], 2)
         self.assertEqual(ir.rules[0].metadata["negated_content_count"], 1)
+        self.assertEqual(ir.rules[0].metadata["prefilter_anchor_reason"], "anchored")
 
-        self.assertEqual(len(ir.patterns), 2)
-        self.assertEqual(ir.patterns[0].data, b"/admin/panel")
+        self.assertEqual(len(ir.patterns), 1)
+        self.assertEqual(ir.patterns[0].data, b"/admin/p")
+        self.assertEqual(ir.patterns[0].pattern_type, "SNORT_RULE_ANCHOR")
         self.assertTrue(ir.patterns[0].nocase)
         self.assertEqual(ir.patterns[0].offset, 0)
         self.assertEqual(ir.patterns[0].depth, 12)
         self.assertTrue(ir.patterns[0].metadata["fast_pattern"])
+        self.assertEqual(ir.patterns[0].metadata["origin_length"], 12)
+        self.assertEqual(ir.patterns[0].metadata["anchor_offset"], 0)
+        self.assertEqual(ir.patterns[0].metadata["anchor_selection"], "fast_pattern")
         self.assertEqual(ir.contexts[0].buffer_kind, "http_uri")
 
-        self.assertEqual(ir.patterns[1].data, b"User-Agent:")
-        self.assertEqual(ir.contexts[1].buffer_kind, "http_header")
-
-    def test_parse_statement_can_include_negated_content(self):
+    def test_parse_statement_excludes_negated_content_by_default(self):
         ir = parse_snort_statements(
             ['alert tcp any any -> any any (content:!"ABCDEFGH"; sid:7;)'],
-            include_negated=True,
         )
 
-        self.assertEqual(len(ir.patterns), 1)
-        self.assertTrue(ir.patterns[0].metadata["negated"])
+        self.assertEqual(len(ir.rules), 1)
+        self.assertEqual(len(ir.patterns), 0)
+        self.assertEqual(
+            ir.rules[0].metadata["prefilter_anchor_reason"], "no_positive_content"
+        )
 
     def test_parse_rules_reads_snapshot_directories(self):
         with tempfile.TemporaryDirectory() as tmpdir:

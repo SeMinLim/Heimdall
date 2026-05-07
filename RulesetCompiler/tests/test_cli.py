@@ -57,7 +57,8 @@ class CliTest(unittest.TestCase):
             manifest_path = tmp / "manifest.json"
             hpat_path = tmp / "rules.hpat"
             rules_path.write_text(
-                'alert tcp any any -> any any (content:"ABCDEFGH"; sid:1;)\n',
+                'alert tcp any any -> any any (content:"ABCDEFGH"; '
+                'content:"IJKLMNOP"; sid:1;)\n',
                 encoding="utf-8",
             )
 
@@ -80,6 +81,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manifest["summary"]["rules"], 1)
         self.assertEqual(manifest["summary"]["literal_patterns"], 1)
         self.assertEqual(manifest["summary"]["selected_anchors"], 1)
+        self.assertEqual(manifest["patterns"][0]["pattern_type"], "SNORT_RULE_ANCHOR")
 
 
 if __name__ == "__main__":

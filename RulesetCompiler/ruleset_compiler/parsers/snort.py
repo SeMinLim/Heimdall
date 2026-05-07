@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -163,6 +163,16 @@ class SnortContentRecord:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SnortAnchorSelection:
+    content: SnortContentRecord
+    anchor: bytes
+    anchor_offset: int
+    anchor_n: int
+    selection: str
+    rarity: int
+
+
 @dataclass(slots=True)
 class SnortParseStats:
     skipped_lines: int = 0
@@ -178,11 +188,16 @@ def parse_snort_rules(
     include_so_stubs: bool = True,
     include_builtins: bool = True,
     include_negated: bool = False,
+    anchor_n: int = 8,
 ) -> RulesetIR:
+    if anchor_n <= 0:
+        raise ValueError("anchor_n must be positive")
+
     stats = SnortParseStats()
     ir = RulesetIR()
     source_ids: dict[tuple[str, str], int] = {}
     context_ids: dict[tuple[str, str], int] = {}
+    parsed_rules: list[tuple[int, SnortRuleRecord, list[SnortContentRecord]]] = []
 
     for path, source, parser_kind in _collect_inputs(
         input_path,
@@ -208,21 +223,15 @@ def parse_snort_rules(
             if rule is None:
                 continue
 
-            rule_uid = ir.next_rule_uid()
-            ir.rules.append(_to_ir_rule(rule_uid, source_id, rule, contents))
+            parsed_rules.append((source_id, rule, contents))
 
-            for content in contents:
-                if content.negated and not include_negated:
-                    continue
-                context_id = _context_id(ir, context_ids, content.proto, content.buffer)
-                ir.patterns.append(
-                    _to_literal_pattern(
-                        pattern_uid=ir.next_pattern_uid(),
-                        rule_uid=rule_uid,
-                        context_id=context_id,
-                        content=content,
-                    )
-                )
+    _emit_rule_prefilter_anchors(
+        ir,
+        parsed_rules=parsed_rules,
+        context_ids=context_ids,
+        anchor_n=anchor_n,
+        include_negated=include_negated,
+    )
 
     return ir
 
@@ -233,12 +242,17 @@ def parse_snort_statements(
     source_uri: str = "<statements>",
     source: str = "rules",
     include_negated: bool = False,
+    anchor_n: int = 8,
 ) -> RulesetIR:
+    if anchor_n <= 0:
+        raise ValueError("anchor_n must be positive")
+
     stats = SnortParseStats()
     ir = RulesetIR()
     source_path = Path(source_uri)
     source_id = _source_id(ir, {}, source, source_path)
     context_ids: dict[tuple[str, str], int] = {}
+    parsed_rules: list[tuple[int, SnortRuleRecord, list[SnortContentRecord]]] = []
 
     for line, statement in enumerate(statements, start=1):
         rule, contents = parse_snort_rule_statement(
@@ -250,20 +264,15 @@ def parse_snort_statements(
         )
         if rule is None:
             continue
-        rule_uid = ir.next_rule_uid()
-        ir.rules.append(_to_ir_rule(rule_uid, source_id, rule, contents))
-        for content in contents:
-            if content.negated and not include_negated:
-                continue
-            context_id = _context_id(ir, context_ids, content.proto, content.buffer)
-            ir.patterns.append(
-                _to_literal_pattern(
-                    pattern_uid=ir.next_pattern_uid(),
-                    rule_uid=rule_uid,
-                    context_id=context_id,
-                    content=content,
-                )
-            )
+        parsed_rules.append((source_id, rule, contents))
+
+    _emit_rule_prefilter_anchors(
+        ir,
+        parsed_rules=parsed_rules,
+        context_ids=context_ids,
+        anchor_n=anchor_n,
+        include_negated=include_negated,
+    )
 
     return ir
 
@@ -461,6 +470,92 @@ def normalize_content(text: str) -> bytes:
     return bytes(data)
 
 
+def ascii_lower_bytes(data: bytes) -> bytes:
+    return bytes(byte + 32 if 0x41 <= byte <= 0x5A else byte for byte in data)
+
+
+def anchor_windows(
+    record: SnortContentRecord, anchor_n: int, *, include_negated: bool = False
+) -> Iterable[tuple[int, bytes, tuple[bytes, bool]]]:
+    if (record.negated and not include_negated) or len(record.pattern) < anchor_n:
+        return
+    for offset in range(0, len(record.pattern) - anchor_n + 1):
+        raw_anchor = record.pattern[offset : offset + anchor_n]
+        canonical = ascii_lower_bytes(raw_anchor) if record.nocase else raw_anchor
+        yield offset, raw_anchor, (canonical, record.nocase)
+
+
+def build_anchor_frequency(
+    contents: Sequence[SnortContentRecord],
+    anchor_n: int,
+    *,
+    include_negated: bool = False,
+) -> Counter[tuple[bytes, bool]]:
+    frequency: Counter[tuple[bytes, bool]] = Counter()
+    for record in contents:
+        for _, _, key in anchor_windows(
+            record, anchor_n, include_negated=include_negated
+        ):
+            frequency[key] += 1
+    return frequency
+
+
+def select_rule_anchor(
+    rule_contents: Sequence[SnortContentRecord],
+    anchor_n: int,
+    frequency: Counter[tuple[bytes, bool]],
+    *,
+    include_negated: bool = False,
+) -> tuple[SnortAnchorSelection | None, str]:
+    positive = [
+        record for record in rule_contents if include_negated or not record.negated
+    ]
+    if not positive:
+        return None, "no_positive_content"
+
+    candidates: list[
+        tuple[
+            tuple[int, int, int, int, int],
+            SnortContentRecord,
+            int,
+            bytes,
+            tuple[bytes, bool],
+            str,
+        ]
+    ] = []
+    for record in positive:
+        for offset, raw_anchor, key in anchor_windows(
+            record, anchor_n, include_negated=include_negated
+        ):
+            selection = "fast_pattern" if record.fast_pattern else "content"
+            score = (
+                0 if record.fast_pattern else 1,
+                frequency[key],
+                -len(record.pattern),
+                record.content_index,
+                offset,
+            )
+            candidates.append((score, record, offset, raw_anchor, key, selection))
+
+    if not candidates:
+        return None, "positive_content_shorter_than_anchor"
+
+    _, record, offset, raw_anchor, key, selection = min(
+        candidates, key=lambda item: item[0]
+    )
+    return (
+        SnortAnchorSelection(
+            content=record,
+            anchor=raw_anchor,
+            anchor_offset=offset,
+            anchor_n=anchor_n,
+            selection=selection,
+            rarity=frequency[key],
+        ),
+        "anchored",
+    )
+
+
 def parse_hex_block(text: str) -> bytes:
     data = bytearray()
     for token in text.split():
@@ -633,6 +728,53 @@ def _source_id(
     return source_ids[key]
 
 
+def _emit_rule_prefilter_anchors(
+    ir: RulesetIR,
+    *,
+    parsed_rules: Sequence[tuple[int, SnortRuleRecord, list[SnortContentRecord]]],
+    context_ids: dict[tuple[str, str], int],
+    anchor_n: int,
+    include_negated: bool,
+) -> None:
+    all_contents = [content for _, _, contents in parsed_rules for content in contents]
+    frequency = build_anchor_frequency(
+        all_contents,
+        anchor_n,
+        include_negated=include_negated,
+    )
+
+    for source_id, rule, contents in parsed_rules:
+        selection, reason = select_rule_anchor(
+            contents,
+            anchor_n,
+            frequency,
+            include_negated=include_negated,
+        )
+        rule_uid = ir.next_rule_uid()
+        ir.rules.append(
+            _to_ir_rule(
+                rule_uid,
+                source_id,
+                rule,
+                contents,
+                prefilter_anchor_reason=reason,
+            )
+        )
+        if selection is None:
+            continue
+
+        content = selection.content
+        context_id = _context_id(ir, context_ids, content.proto, content.buffer)
+        ir.patterns.append(
+            _to_literal_pattern(
+                pattern_uid=ir.next_pattern_uid(),
+                rule_uid=rule_uid,
+                context_id=context_id,
+                selection=selection,
+            )
+        )
+
+
 def _context_id(
     ir: RulesetIR, context_ids: dict[tuple[str, str], int], proto: str, buffer: str
 ) -> int:
@@ -658,6 +800,8 @@ def _to_ir_rule(
     source_id: int,
     rule: SnortRuleRecord,
     contents: Sequence[SnortContentRecord],
+    *,
+    prefilter_anchor_reason: str,
 ) -> Rule:
     return Rule(
         rule_uid=rule_uid,
@@ -680,6 +824,7 @@ def _to_ir_rule(
                 1 for content in contents if not content.negated
             ),
             "negated_content_count": sum(1 for content in contents if content.negated),
+            "prefilter_anchor_reason": prefilter_anchor_reason,
             "has_pcre": rule.has_pcre,
             "has_regex": rule.has_regex,
             "has_flowbits": rule.has_flowbits,
@@ -690,17 +835,22 @@ def _to_ir_rule(
 
 
 def _to_literal_pattern(
-    *, pattern_uid: int, rule_uid: int, context_id: int, content: SnortContentRecord
+    *,
+    pattern_uid: int,
+    rule_uid: int,
+    context_id: int,
+    selection: SnortAnchorSelection,
 ) -> LiteralPattern:
+    content = selection.content
     return LiteralPattern(
         pattern_uid=pattern_uid,
         rule_uid=rule_uid,
         context_id=context_id,
-        data=content.pattern,
+        data=selection.anchor,
         nocase=content.nocase,
         offset=_parse_int(content.modifiers.get("offset")),
         depth=_parse_int(content.modifiers.get("depth")),
-        pattern_type="SNORT_CONTENT",
+        pattern_type="SNORT_RULE_ANCHOR",
         source_line=content.line,
         metadata={
             "source": content.source,
@@ -710,6 +860,12 @@ def _to_literal_pattern(
             "raw_text": content.raw_text,
             "negated": content.negated,
             "fast_pattern": content.fast_pattern,
+            "origin_length": len(content.pattern),
+            "origin_pattern_hex": content.pattern.hex(),
+            "anchor_n": selection.anchor_n,
+            "anchor_offset": selection.anchor_offset,
+            "anchor_selection": selection.selection,
+            "anchor_rarity": selection.rarity,
             "modifiers": dict(content.modifiers),
             "position_signature": list(content.position_signature),
             "services": list(content.services),
@@ -732,14 +888,19 @@ def _parse_int(value: str | None) -> int | None:
 
 
 __all__ = [
+    "SnortAnchorSelection",
     "SnortContentRecord",
     "SnortParseStats",
     "SnortRuleId",
     "SnortRuleRecord",
+    "anchor_windows",
+    "ascii_lower_bytes",
+    "build_anchor_frequency",
     "normalize_content",
     "parse_hex_block",
     "parse_snort_rule_statement",
     "parse_snort_rules",
     "parse_snort_statements",
+    "select_rule_anchor",
     "tokenize_body",
 ]
