@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from ruleset_compiler.anchor_select import ScoreWeights, select_anchors
 from ruleset_compiler.emit_hpat import write_hpat
 from ruleset_compiler.emit_manifest import write_manifest
 from ruleset_compiler.ir import RulesetIR
 from ruleset_compiler.parsers.ips_workbook import parse_ips_workbook
+from ruleset_compiler.parsers.snort import parse_snort_rules
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,13 +46,14 @@ def compile_ir(
 
     select_anchors(
         ir,
+        record_size=record_size,
         window_size=window_size,
         allow_overlap=allow_overlap,
         deduplicate=deduplicate,
         weights=weights,
     )
 
-    compiler_options = {
+    compiler_options: dict[str, Any] = {
         "record_size": record_size,
         "window_size": window_size,
         "allow_overlap": allow_overlap,
@@ -118,6 +120,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     workbook.set_defaults(func=_run_compile_ips_workbook)
 
+    snort = subparsers.add_parser(
+        "compile-snort",
+        help="Compile from Snort rules.",
+    )
+    snort.add_argument(
+        "input",
+        type=Path,
+        help="Snort snapshot root, rules directory, or one .rules file.",
+    )
+    snort.add_argument("--manifest", type=Path, help="Manifest JSON output path")
+    snort.add_argument("--hpat", type=Path, help="HPAT v1 binary output path")
+    snort.add_argument("--record-size", type=_positive_int, default=64)
+    snort.add_argument("--window-size", type=_positive_int, default=8)
+    snort.add_argument(
+        "--non-overlap",
+        action="store_true",
+        help="Use non-overlapping window offsets.",
+    )
+    snort.add_argument(
+        "--allow-duplicate-anchors",
+        action="store_true",
+        help="Disable anchor deduplication.",
+    )
+    snort.add_argument(
+        "--case-sensitive-hpat",
+        action="store_true",
+        help="Do not lowercase nocase literal bytes in HPAT records.",
+    )
+    snort.add_argument(
+        "--no-so-source",
+        action="store_true",
+        help="Do not parse embedded SO rules from so_rules/src/**/*.cc.",
+    )
+    snort.add_argument(
+        "--no-so-stubs",
+        action="store_true",
+        help="Do not parse so_rules/*.rules stubs.",
+    )
+    snort.add_argument(
+        "--no-builtins",
+        action="store_true",
+        help="Do not parse builtins/*.rules.",
+    )
+    snort.add_argument(
+        "--include-negated-content",
+        action="store_true",
+        help="Include !content literals as prefilter candidates.",
+    )
+    snort.set_defaults(func=_run_compile_snort)
+
     return parser
 
 
@@ -135,6 +187,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run_compile_ips_workbook(args: argparse.Namespace) -> int:
     ir = parse_ips_workbook(args.workbook)
+    result = compile_ir(
+        ir,
+        manifest_path=args.manifest,
+        hpat_path=args.hpat,
+        record_size=args.record_size,
+        window_size=args.window_size,
+        allow_overlap=not args.non_overlap,
+        deduplicate=not args.allow_duplicate_anchors,
+        normalize_nocase=not args.case_sensitive_hpat,
+    )
+
+    print(
+        "compiled "
+        f"rules={result.rules} "
+        f"patterns={result.literal_patterns} "
+        f"anchors={result.selected_anchors} "
+        f"hpat_records={result.hpat_records if result.hpat_records is not None else 0}"
+    )
+    return 0
+
+
+def _run_compile_snort(args: argparse.Namespace) -> int:
+    ir = parse_snort_rules(
+        args.input,
+        include_so_source=not args.no_so_source,
+        include_so_stubs=not args.no_so_stubs,
+        include_builtins=not args.no_builtins,
+        include_negated=args.include_negated_content,
+    )
     result = compile_ir(
         ir,
         manifest_path=args.manifest,
