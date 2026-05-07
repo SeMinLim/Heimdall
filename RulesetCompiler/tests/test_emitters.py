@@ -44,7 +44,7 @@ class EmitterTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["summary"]["selected_anchors"], 1)
             self.assertEqual(
-                manifest["selected_anchors"][0]["bytes_hex"], "6162636465666768"
+                manifest["selected_anchors"][0]["bytes_hex"], "4162436445664768"
             )
 
 

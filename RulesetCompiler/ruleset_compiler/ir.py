@@ -9,6 +9,34 @@ from typing import Any
 JsonObject = dict[str, Any]
 
 
+def empty_json_object() -> JsonObject:
+    return {}
+
+
+def empty_str_list() -> list[str]:
+    return []
+
+
+def empty_rule_sources() -> list["RuleSource"]:
+    return []
+
+
+def empty_match_contexts() -> list["MatchContext"]:
+    return []
+
+
+def empty_rules() -> list["Rule"]:
+    return []
+
+
+def empty_literal_patterns() -> list["LiteralPattern"]:
+    return []
+
+
+def empty_selected_anchors() -> list["SelectedAnchor"]:
+    return []
+
+
 def bytes_to_hex(data: bytes) -> str:
     return data.hex()
 
@@ -24,7 +52,7 @@ class RuleSource:
     uri: str
     native_engine: str = "custom"
     checksum: str | None = None
-    metadata: JsonObject = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=empty_json_object)
 
     def to_json(self) -> JsonObject:
         return {
@@ -45,8 +73,8 @@ class MatchContext:
     normalization: str = "raw"
     direction: str = "either"
     stream_scope: str = "packet"
-    transform_chain: list[str] = field(default_factory=list)
-    metadata: JsonObject = field(default_factory=dict)
+    transform_chain: list[str] = field(default_factory=empty_str_list)
+    metadata: JsonObject = field(default_factory=empty_json_object)
 
     def to_json(self) -> JsonObject:
         return {
@@ -72,7 +100,7 @@ class Rule:
     severity: str | None = None
     message: str | None = None
     source_line: int | None = None
-    metadata: JsonObject = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=empty_json_object)
 
     def to_json(self) -> JsonObject:
         return {
@@ -100,7 +128,7 @@ class LiteralPattern:
     depth: int | None = None
     pattern_type: str = "TEXT"
     source_line: int | None = None
-    metadata: JsonObject = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=empty_json_object)
 
     @property
     def length(self) -> int:
@@ -174,11 +202,13 @@ class SelectedAnchor:
 
 @dataclass(slots=True)
 class RulesetIR:
-    sources: list[RuleSource] = field(default_factory=list)
-    contexts: list[MatchContext] = field(default_factory=list)
-    rules: list[Rule] = field(default_factory=list)
-    patterns: list[LiteralPattern] = field(default_factory=list)
-    selected_anchors: list[SelectedAnchor] = field(default_factory=list)
+    sources: list[RuleSource] = field(default_factory=empty_rule_sources)
+    contexts: list[MatchContext] = field(default_factory=empty_match_contexts)
+    rules: list[Rule] = field(default_factory=empty_rules)
+    patterns: list[LiteralPattern] = field(default_factory=empty_literal_patterns)
+    selected_anchors: list[SelectedAnchor] = field(
+        default_factory=empty_selected_anchors
+    )
 
     def to_json(self, include_pattern_bytes: bool = True) -> JsonObject:
         return {

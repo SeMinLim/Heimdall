@@ -5,6 +5,7 @@
 #   "openpyxl",
 # ]
 # ///
+# pyright: reportMissingModuleSource=false
 
 from __future__ import annotations
 
