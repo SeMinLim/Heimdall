@@ -1,5 +1,6 @@
 # Build output
 host_*/obj/
+prefilter_builder/obj/
 
 # Emulation config
 host_*/emconfig.json
