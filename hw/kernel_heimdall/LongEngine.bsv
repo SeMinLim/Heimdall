@@ -9,8 +9,9 @@ import LongEngineTypes::*;
 import AnchorExtractor::*;
 import CRC32::*;
 import CRC32Wrap::*;
+import PreFilter::*;
 
-// Pipeline: AnchorExtractor (57 lanes) -> CRC32 hash -> serialized XOR checksum(temp. for validation)
+// Pipeline: AnchorExtractor (57 lanes) -> CRC32 hash -> 1-bit prefilter lookup
 
 interface LongEngineIfc;
     method Action putPacket(Payload payload, PayloadLen len);
@@ -27,12 +28,13 @@ endinterface
 module mkLongEngine(LongEngineIfc);
     // Sub-modules
     AnchorExtractorIfc anchorExt <- mkAnchorExtractor;
+    PreFilterIfc preFilter <- mkPreFilter;
 
     // 57 parallel CRC32 modules (synthesized boundary to avoid bsc inlining)
     Vector#(NumLanes, CRC32Ifc) crc32Mods <- replicateM(mkCRC32Synth);
 
-    // Per-lane hash output FIFOs
-    Vector#(NumLanes, FIFOF#(Bit#(32))) hashPipes <- replicateM(mkFIFOF);
+    // Per-lane prefilter address FIFOs
+    Vector#(NumLanes, FIFOF#(PreFilterAddr)) preFilterAddrPipes <- replicateM(mkFIFOF);
 
     // Performance instrumentation (first-packet, lane-0 only)
     Reg#(Bit#(32)) leCycle <- mkReg(0);
@@ -58,43 +60,60 @@ module mkLongEngine(LongEngineIfc);
 
         rule drainCRC32;
             let resp <- crc32Mods[i].out.get;
-            hashPipes[i].enq(resp.crcOut);
+            preFilterAddrPipes[i].enq(reduceCrc32ToPreFilterAddr(resp.crcOut));
             if (i == 0 && !seenDrain) begin tsDrain <= leCycle; seenDrain <= True; end
         endrule
     end
 
-    // Serialized collection: XOR all valid hashes into a 32-bit checksum
+    // Serialized collection: lookup all valid hashes and count prefilter hits
     FIFOF#(Bit#(8))  validCountQ <- mkFIFOF;
     FIFOF#(Bit#(32)) resultQ     <- mkFIFOF;
 
-    Reg#(Bit#(8))  collectIdx   <- mkReg(0);
-    Reg#(Bit#(8))  collectTotal <- mkReg(0);
-    Reg#(Bool)     collecting   <- mkReg(False);
-    Reg#(Bit#(32)) xorAcc       <- mkReg(0);
+    Reg#(Bit#(8))  lookupIdx   <- mkReg(0);
+    Reg#(Bit#(8))  lookupTotal <- mkReg(0);
+    Reg#(Bit#(8))  hitRespCnt  <- mkReg(0);
+    Reg#(Bool)     filtering   <- mkReg(False);
+    Reg#(Bit#(32)) hitCount    <- mkReg(0);
 
-    rule startCollect (!collecting && validCountQ.notEmpty);
-        collectTotal <= validCountQ.first;
+    rule startFilter (!filtering && validCountQ.notEmpty);
+        let total = validCountQ.first;
         validCountQ.deq;
-        collectIdx <= 0;
-        xorAcc <= 0;
-        collecting <= True;
+
+        lookupIdx <= 0;
+        hitRespCnt <= 0;
+        hitCount <= 0;
+
+        if (total == 0) begin
+            resultQ.enq(0);
+            if (!seenCollect) begin tsCollect <= leCycle; seenCollect <= True; end
+        end else begin
+            lookupTotal <= total;
+            filtering <= True;
+        end
     endrule
 
     for (Integer i = 0; i < valueOf(NumLanes); i = i + 1) begin
-        rule doCollect (collecting && collectIdx == fromInteger(i) && collectIdx < zeroExtend(collectTotal));
-            let h = hashPipes[i].first;
-            hashPipes[i].deq;
-            Bit#(32) acc = xorAcc ^ h;
-            if (collectIdx + 1 >= zeroExtend(collectTotal)) begin
-                resultQ.enq(acc);
-                collecting <= False;
-                if (!seenCollect) begin tsCollect <= leCycle; seenCollect <= True; end
-            end else begin
-                xorAcc <= acc;
-            end
-            collectIdx <= collectIdx + 1;
+        rule issuePreFilterLookup (filtering && lookupIdx == fromInteger(i) && lookupIdx < lookupTotal);
+            let addr = preFilterAddrPipes[i].first;
+            preFilterAddrPipes[i].deq;
+            preFilter.lookup(addr);
+            lookupIdx <= lookupIdx + 1;
         endrule
     end
+
+    rule collectPreFilterHit (filtering && hitRespCnt < lookupTotal);
+        let hit <- preFilter.getHit;
+        Bit#(32) nextHitCount = hitCount + zeroExtend(pack(hit));
+
+        if (hitRespCnt + 1 >= lookupTotal) begin
+            resultQ.enq(nextHitCount);
+            filtering <= False;
+            if (!seenCollect) begin tsCollect <= leCycle; seenCollect <= True; end
+        end else begin
+            hitCount <= nextHitCount;
+        end
+        hitRespCnt <= hitRespCnt + 1;
+    endrule
 
     method Action putPacket(Payload payload, PayloadLen len);
         anchorExt.enqPacket(payload, len);

@@ -12,4 +12,15 @@ typedef Bit#(64)   LaneData;      // each lane: 8 bytes
 
 typedef Bit#(57)   ValidMaskBits; // one bit per lane
 
+typedef 19 PreFilterAddrBits;
+typedef TExp#(PreFilterAddrBits) PreFilterNumEntries;
+typedef Bit#(PreFilterAddrBits) PreFilterAddr;
+typedef Bit#(1) PreFilterBit;
+
+function PreFilterAddr reduceCrc32ToPreFilterAddr(Bit#(32) hash);
+	PreFilterAddr lower = hash[18:0];
+	PreFilterAddr upper = hash[31:13];
+	return lower ^ upper;
+endfunction
+
 endpackage

@@ -9,11 +9,11 @@ import KernelTypes::*;
 import LongEngineTypes::*;
 import LongEngine::*;
 
-// CRC32 57-lane benchmark kernel.
+// Long-engine prefilter kernel bring-up.
 //
 // PLRAM layout (mapped to URAM on U50):
 //   Port 0 (input):  N x 64-byte packets
-//   Port 1 (output): header (1 word) + N x checksum words
+//   Port 1 (output): header (1 word) + N x prefilter hit-count words
 //
 // scalar00[15:0] = number of packets
 //
@@ -21,7 +21,7 @@ import LongEngine::*;
 //   [31:0]   = cycleStart, [63:32] = cycleAllFed,
 //   [95:64]  = cycleFirstOut, [127:96] = cycleAllDone,
 //   [159:128]= numPackets
-// Output words 1..N: per-packet CRC32 XOR checksum
+// Output words 1..N: per-packet prefilter hit count
 
 interface KernelMainIfc;
     method Action start(Bit#(32) param);
@@ -29,7 +29,7 @@ interface KernelMainIfc;
     interface Vector#(MemPortCnt, MemPortIfc) mem;
 endinterface
 
-(* descending_urgency = "systemStart, reqReadPkt, readPktData, processPacket, collectResult, writeHeader, writeChecksum" *)
+(* descending_urgency = "systemStart, reqReadPkt, readPktData, processPacket, collectResult, writeHeader, writeResult" *)
 module mkKernelMain(KernelMainIfc);
     LongEngineIfc longEngine <- mkLongEngine;
 
@@ -134,12 +134,12 @@ module mkKernelMain(KernelMainIfc);
         collectResultOn <= True;
     endrule
 
-    // Phase 3: Collect CRC32 checksum results
+    // Phase 3: Collect prefilter hit-count results
     Reg#(Bit#(32)) collectResultCnt <- mkReg(0);
     rule collectResult( collectResultOn );
-        let checksum <- longEngine.getResult;
+        let hitCount <- longEngine.getResult;
 
-        Bit#(512) resultWord = zeroExtend(checksum);
+        Bit#(512) resultWord = zeroExtend(hitCount);
         resultQ.enq(resultWord);
 
         // Record cycle timestamps
@@ -159,7 +159,7 @@ module mkKernelMain(KernelMainIfc);
     endrule
 
     // Phase 4: Write output to port 1
-    // Word 0 = cycle counter header, words 1..N = per-packet checksum
+    // Word 0 = cycle counter header, words 1..N = per-packet prefilter hit count
     Reg#(Bit#(32)) writeCnt  <- mkReg(0);
     Reg#(Bit#(64)) writeAddr <- mkReg(0);
 
@@ -181,7 +181,7 @@ module mkKernelMain(KernelMainIfc);
         writeAddr <= 64;
     endrule
 
-    rule writeChecksum ( writeOn && writeCnt > 0 );
+    rule writeResult ( writeOn && writeCnt > 0 );
         writeReqQs[1].enq(MemPortReq{addr: writeAddr, bytes: 64});
         let r = resultQ.first;
         resultQ.deq;

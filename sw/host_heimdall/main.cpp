@@ -17,41 +17,8 @@
 
 static constexpr size_t PACKET_BYTES = 64;
 static constexpr size_t WORD_BYTES = 64;  // 512-bit device memory word
-static constexpr int NUM_LANES = 57;
 
 using namespace std;
-
-// SW reference CRC32 (matches bluelibrary mkCRC32)
-static uint32_t crc32_reflected_32(uint32_t crc, uint32_t word) {
-  for (int i = 0; i < 32; ++i) {
-    uint32_t fb = (crc ^ (word >> i)) & 1u;
-    crc >>= 1;
-    if (fb) crc ^= 0xEDB88320u;
-  }
-  return crc;
-}
-
-// CRC32 of a 64-bit value: init=0xFFFFFFFF, process lo32 then hi32
-static uint32_t crc32_64bit(uint64_t data) {
-  uint32_t lo32 = static_cast<uint32_t>(data & 0xFFFFFFFF);
-  uint32_t hi32 = static_cast<uint32_t>(data >> 32);
-  uint32_t mid = crc32_reflected_32(0xFFFFFFFFu, lo32);
-  return crc32_reflected_32(mid, hi32);
-}
-
-// Compute XOR checksum of 57-lane CRC32 hashes for a 64-byte packet
-static uint32_t sw_xor_checksum(const uint8_t* pkt, size_t len) {
-  int nValid = (len >= 8) ? static_cast<int>(len) - 7 : 0;
-  if (nValid > NUM_LANES) nValid = NUM_LANES;
-
-  uint32_t xorAcc = 0;
-  for (int i = 0; i < nValid; i++) {
-    uint64_t anchor;
-    memcpy(&anchor, pkt + i, 8);  // little-endian
-    xorAcc ^= crc32_64bit(anchor);
-  }
-  return xorAcc;
-}
 
 int main(int argc, char** argv) {
   if (argc < 3) {
@@ -81,13 +48,13 @@ int main(int argc, char** argv) {
   pf.read(reinterpret_cast<char*>(pkt_data.data()), pkt_size);
   pf.close();
 
-  cout << "[Heimdall CRC32 57-Lane Benchmark]" << endl;
+  cout << "[Heimdall Long Engine Prefilter Bring-up]" << endl;
   cout << "  Packets: " << packet_file << " (" << num_packets << " x 64B)"
        << endl;
 
   // Buffer layout:
   //   Input  = N x 64B packets
-  //   Output = (N+1) x 64B words (header + N checksums)
+  //   Output = (N+1) x 64B words (header + N prefilter hit counts)
   size_t in_bytes = num_packets * PACKET_BYTES;
   size_t out_bytes = (num_packets + 1) * WORD_BYTES;
 
@@ -173,30 +140,32 @@ int main(int argc, char** argv) {
          << " packets/cycle" << endl;
   }
 
-  // Verify CRC checksums against SW reference
-  cout << endl << "=== CRC32 Checksum Verification ===" << endl;
-  int mismatches = 0;
+  cout << endl << "=== Prefilter Hit Count Report ===" << endl;
+  cout << "  Note: Bloom table loading is not wired yet; counts reflect current"
+       << " table contents." << endl;
+
+  uint64_t total_hits = 0;
+  uint32_t packets_with_hits = 0;
+  uint32_t sample_count = min<uint32_t>(num_packets, 16);
   for (uint32_t i = 0; i < num_packets; i++) {
-    uint32_t hw_checksum = 0;
-    memcpy(&hw_checksum, out_map + (i + 1) * WORD_BYTES, 4);
+    uint32_t hit_count = 0;
+    memcpy(&hit_count, out_map + (i + 1) * WORD_BYTES, 4);
+    total_hits += hit_count;
+    if (hit_count != 0) packets_with_hits++;
 
-    uint32_t sw_checksum =
-        sw_xor_checksum(pkt_data.data() + i * PACKET_BYTES, PACKET_BYTES);
-
-    if (hw_checksum != sw_checksum) {
-      cout << "  MISMATCH pkt " << i << ": HW=0x" << hex << setw(8)
-           << setfill('0') << hw_checksum << " SW=0x" << setw(8) << sw_checksum
-           << dec << endl;
-      mismatches++;
+    if (i < sample_count) {
+      cout << "  pkt " << setw(4) << i << ": prefilter hits = " << hit_count
+           << endl;
     }
   }
 
-  if (mismatches == 0) {
-    cout << "  All " << num_packets << " packets match. TEST PASSED" << endl;
-  } else {
-    cout << "  " << mismatches << " / " << num_packets
-         << " mismatches. TEST FAILED" << endl;
+  if (num_packets > sample_count) {
+    cout << "  ... " << (num_packets - sample_count)
+         << " more packets omitted" << endl;
   }
+  cout << "  Packets with hits = " << packets_with_hits << " / " << num_packets
+       << endl;
+  cout << "  Total lane hits   = " << total_hits << endl;
 
-  return (mismatches == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+  return EXIT_SUCCESS;
 }
