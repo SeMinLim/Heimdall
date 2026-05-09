@@ -16,6 +16,7 @@ import PreFilter::*;
 interface LongEngineIfc;
     method Action putPacket(Payload payload, PayloadLen len);
     method ActionValue#(Bit#(32)) getResult;
+    method Action writePreFilterEntry(PreFilterAddr addr, Bool hit);
 
     // Per-stage timestamps (first-packet, lane 0)
     method Bit#(32) perfTsPut;
@@ -126,6 +127,10 @@ module mkLongEngine(LongEngineIfc);
     method ActionValue#(Bit#(32)) getResult;
         resultQ.deq;
         return resultQ.first;
+    endmethod
+
+    method Action writePreFilterEntry(PreFilterAddr addr, Bool hit) if (!filtering);
+        preFilter.writeEntry(addr, hit);
     endmethod
 
     method Bit#(32) perfTsPut     = tsPut;

@@ -12,7 +12,7 @@ import LongEngine::*;
 // Long-engine prefilter kernel bring-up.
 //
 // PLRAM layout (mapped to URAM on U50):
-//   Port 0 (input):  N x 64-byte packets
+//   Port 0 (input):  64KiB packed Bloom bitset + N x 64-byte packets
 //   Port 1 (output): header (1 word) + N x prefilter hit-count words
 //
 // scalar00[15:0] = number of packets
@@ -29,7 +29,10 @@ interface KernelMainIfc;
     interface Vector#(MemPortCnt, MemPortIfc) mem;
 endinterface
 
-(* descending_urgency = "systemStart, reqReadPkt, readPktData, processPacket, collectResult, writeHeader, writeResult" *)
+typedef 65536 PreFilterBitsetBytes;
+typedef 1024 PreFilterBitsetWords;
+
+(* descending_urgency = "systemStart, reqLoadPreFilter, readLoadPreFilterWord, writeLoadPreFilterBit, reqReadPkt, readPktData, processPacket, collectResult, writeHeader, writeResult" *)
 module mkKernelMain(KernelMainIfc);
     LongEngineIfc longEngine <- mkLongEngine;
 
@@ -40,8 +43,12 @@ module mkKernelMain(KernelMainIfc);
     FIFO#(Bit#(512)) resultQ   <- mkSizedBRAMFIFO(8);
 
     Reg#(Bool) started <- mkReg(False);
+    Reg#(Bool) loadingPreFilter <- mkReg(False);
 
     // Phase control
+    Reg#(Bool) reqLoadPreFilterOn   <- mkReg(False);
+    Reg#(Bool) readLoadPreFilterOn  <- mkReg(False);
+    Reg#(Bool) writeLoadPreFilterOn <- mkReg(False);
     Reg#(Bool) reqReadPktOn      <- mkReg(False);
     Reg#(Bool) readPktOn         <- mkReg(False);
     Reg#(Bool) processPktOn      <- mkReg(False);
@@ -65,7 +72,8 @@ module mkKernelMain(KernelMainIfc);
     rule systemStart( !started );
         startQ.deq;
         started <= True;
-        reqReadPktOn <= True;
+        loadingPreFilter <= True;
+        reqLoadPreFilterOn <= True;
         longEngine.perfReset;
     endrule
 
@@ -75,16 +83,61 @@ module mkKernelMain(KernelMainIfc);
     Vector#(MemPortCnt, FIFO#(Bit#(512)))  writeWordQs <- replicateM(mkFIFO);
     Vector#(MemPortCnt, FIFO#(Bit#(512)))  readWordQs  <- replicateM(mkFIFO);
 
-    // Phase 1: Read packets from port 0
-    Reg#(Bit#(32)) reqReadPktCnt <- mkReg(0);
-    Reg#(Bit#(64)) pktReadAddr   <- mkReg(0);
+    // Phase 0: Load the packed 64KiB prefilter bitset from port 0.
+    // Bit address A maps to byte A/8 and bit A%8 in the host-generated file.
+    Reg#(Bit#(11))  loadPreFilterWordIdx <- mkReg(0);
+    Reg#(Bit#(9))   loadPreFilterBitIdx  <- mkReg(0);
+    Reg#(Bit#(512)) loadPreFilterWord    <- mkReg(0);
 
-    rule reqReadPkt( reqReadPktOn );
+    rule reqLoadPreFilter( loadingPreFilter && reqLoadPreFilterOn );
+        Bit#(64) loadAddr = zeroExtend(loadPreFilterWordIdx) << 6;
+        readReqQs[0].enq(MemPortReq{addr: loadAddr, bytes: 64});
+        reqLoadPreFilterOn <= False;
+        readLoadPreFilterOn <= True;
+    endrule
+
+    rule readLoadPreFilterWord( loadingPreFilter && readLoadPreFilterOn );
+        let data = readWordQs[0].first;
+        readWordQs[0].deq;
+
+        loadPreFilterWord <= data;
+        loadPreFilterBitIdx <= 0;
+        readLoadPreFilterOn <= False;
+        writeLoadPreFilterOn <= True;
+    endrule
+
+    rule writeLoadPreFilterBit( loadingPreFilter && writeLoadPreFilterOn );
+        Bit#(1) bitVal = truncate(loadPreFilterWord >> loadPreFilterBitIdx);
+        PreFilterAddr addr = { truncate(loadPreFilterWordIdx), loadPreFilterBitIdx };
+        longEngine.writePreFilterEntry(addr, bitVal != 0);
+
+        if ( loadPreFilterBitIdx == 511 ) begin
+            loadPreFilterBitIdx <= 0;
+            writeLoadPreFilterOn <= False;
+
+            if ( loadPreFilterWordIdx + 1 == fromInteger(valueOf(PreFilterBitsetWords)) ) begin
+                loadPreFilterWordIdx <= 0;
+                loadingPreFilter <= False;
+                reqReadPktOn <= True;
+            end else begin
+                loadPreFilterWordIdx <= loadPreFilterWordIdx + 1;
+                reqLoadPreFilterOn <= True;
+            end
+        end else begin
+            loadPreFilterBitIdx <= loadPreFilterBitIdx + 1;
+        end
+    endrule
+
+    // Phase 1: Read packets from port 0 after the prefilter bitset prefix.
+    Reg#(Bit#(32)) reqReadPktCnt <- mkReg(0);
+    Reg#(Bit#(64)) pktReadAddr   <- mkReg(fromInteger(valueOf(PreFilterBitsetBytes)));
+
+    rule reqReadPkt( !loadingPreFilter && reqReadPktOn );
         readReqQs[0].enq(MemPortReq{addr: pktReadAddr, bytes: 64});
 
         if ( reqReadPktCnt + 1 == numPackets ) begin
             reqReadPktCnt <= 0;
-            pktReadAddr <= 0;
+            pktReadAddr <= fromInteger(valueOf(PreFilterBitsetBytes));
             reqReadPktOn <= False;
         end else begin
             pktReadAddr <= pktReadAddr + 64;
@@ -95,7 +148,7 @@ module mkKernelMain(KernelMainIfc);
     endrule
 
     Reg#(Bit#(32)) readPktCnt <- mkReg(0);
-    rule readPktData( readPktOn );
+    rule readPktData( !loadingPreFilter && readPktOn );
         let data = readWordQs[0].first;
         readWordQs[0].deq;
 
@@ -113,7 +166,7 @@ module mkKernelMain(KernelMainIfc);
 
     // Phase 2: Feed packets to LongEngine
     Reg#(Bit#(32)) processPktCnt <- mkReg(0);
-    rule processPacket( processPktOn );
+    rule processPacket( !loadingPreFilter && processPktOn );
         let data = dataQ_in.first;
         dataQ_in.deq;
 
@@ -136,7 +189,7 @@ module mkKernelMain(KernelMainIfc);
 
     // Phase 3: Collect prefilter hit-count results
     Reg#(Bit#(32)) collectResultCnt <- mkReg(0);
-    rule collectResult( collectResultOn );
+    rule collectResult( !loadingPreFilter && collectResultOn );
         let hitCount <- longEngine.getResult;
 
         Bit#(512) resultWord = zeroExtend(hitCount);
@@ -163,7 +216,7 @@ module mkKernelMain(KernelMainIfc);
     Reg#(Bit#(32)) writeCnt  <- mkReg(0);
     Reg#(Bit#(64)) writeAddr <- mkReg(0);
 
-    rule writeHeader ( writeOn && writeCnt == 0 );
+    rule writeHeader ( !loadingPreFilter && writeOn && writeCnt == 0 );
         writeReqQs[1].enq(MemPortReq{addr: 0, bytes: 64});
         Bit#(512) header = 0;
         header[31:0]    = cycleStart;
@@ -181,7 +234,7 @@ module mkKernelMain(KernelMainIfc);
         writeAddr <= 64;
     endrule
 
-    rule writeResult ( writeOn && writeCnt > 0 );
+    rule writeResult ( !loadingPreFilter && writeOn && writeCnt > 0 );
         writeReqQs[1].enq(MemPortReq{addr: writeAddr, bytes: 64});
         let r = resultQ.first;
         resultQ.deq;
