@@ -18,11 +18,18 @@ interface LongEngineIfc;
     method ActionValue#(Bit#(32)) getResult;
     method Action writePreFilterEntry(PreFilterAddr addr, Bool hit);
 
-    // Per-stage timestamps (first-packet, lane 0)
+    // Per-stage timestamps (first-packet, lane 0) and aggregate counters
     method Bit#(32) perfTsPut;
     method Bit#(32) perfTsFeed;
     method Bit#(32) perfTsDrain;
-    method Bit#(32) perfTsCollect;
+    method Bit#(32) perfTsFilterDone;
+    method Bit#(32) perfPacketsAccepted;
+    method Bit#(32) perfPacketsCompleted;
+    method Bit#(32) perfValidAnchors;
+    method Bit#(32) perfPreFilterLookupReqs;
+    method Bit#(32) perfPreFilterLookupResps;
+    method Bit#(32) perfPreFilterHits;
+    method Bit#(32) perfFilterBusyCycles;
     method Action perfReset;
 endinterface
 
@@ -44,11 +51,19 @@ module mkLongEngine(LongEngineIfc);
     Reg#(Bit#(32)) tsPut     <- mkReg(0);
     Reg#(Bit#(32)) tsFeed    <- mkReg(0);
     Reg#(Bit#(32)) tsDrain   <- mkReg(0);
-    Reg#(Bit#(32)) tsCollect <- mkReg(0);
+    Reg#(Bit#(32)) tsFilterDone <- mkReg(0);
     Reg#(Bool) seenPut     <- mkReg(False);
     Reg#(Bool) seenFeed    <- mkReg(False);
     Reg#(Bool) seenDrain   <- mkReg(False);
-    Reg#(Bool) seenCollect <- mkReg(False);
+    Reg#(Bool) seenFilterDone <- mkReg(False);
+
+    Reg#(Bit#(32)) packetsAccepted      <- mkReg(0);
+    Reg#(Bit#(32)) packetsCompleted     <- mkReg(0);
+    Reg#(Bit#(32)) validAnchors         <- mkReg(0);
+    Reg#(Bit#(32)) preFilterLookupReqs  <- mkReg(0);
+    Reg#(Bit#(32)) preFilterLookupResps <- mkReg(0);
+    Reg#(Bit#(32)) preFilterHits        <- mkReg(0);
+    Reg#(Bit#(32)) filterBusyCycles     <- mkReg(0);
 
     // Feed anchors into CRC32 modules and drain results
     for (Integer i = 0; i < valueOf(NumLanes); i = i + 1) begin
@@ -66,7 +81,7 @@ module mkLongEngine(LongEngineIfc);
         endrule
     end
 
-    // Serialized collection: lookup all valid hashes and count prefilter hits
+    // Serialized prefilter lookup: issue all valid hashes and count hit responses
     FIFOF#(Bit#(8))  validCountQ <- mkFIFOF;
     FIFOF#(Bit#(32)) resultQ     <- mkFIFOF;
 
@@ -75,6 +90,10 @@ module mkLongEngine(LongEngineIfc);
     Reg#(Bit#(8))  hitRespCnt  <- mkReg(0);
     Reg#(Bool)     filtering   <- mkReg(False);
     Reg#(Bit#(32)) hitCount    <- mkReg(0);
+
+    rule countFilterBusy (filtering);
+        filterBusyCycles <= filterBusyCycles + 1;
+    endrule
 
     rule startFilter (!filtering && validCountQ.notEmpty);
         let total = validCountQ.first;
@@ -86,7 +105,8 @@ module mkLongEngine(LongEngineIfc);
 
         if (total == 0) begin
             resultQ.enq(0);
-            if (!seenCollect) begin tsCollect <= leCycle; seenCollect <= True; end
+            packetsCompleted <= packetsCompleted + 1;
+            if (!seenFilterDone) begin tsFilterDone <= leCycle; seenFilterDone <= True; end
         end else begin
             lookupTotal <= total;
             filtering <= True;
@@ -99,17 +119,21 @@ module mkLongEngine(LongEngineIfc);
             preFilterAddrPipes[i].deq;
             preFilter.lookup(addr);
             lookupIdx <= lookupIdx + 1;
+            preFilterLookupReqs <= preFilterLookupReqs + 1;
         endrule
     end
 
     rule collectPreFilterHit (filtering && hitRespCnt < lookupTotal);
         let hit <- preFilter.getHit;
         Bit#(32) nextHitCount = hitCount + zeroExtend(pack(hit));
+        preFilterLookupResps <= preFilterLookupResps + 1;
+        preFilterHits <= preFilterHits + zeroExtend(pack(hit));
 
         if (hitRespCnt + 1 >= lookupTotal) begin
             resultQ.enq(nextHitCount);
             filtering <= False;
-            if (!seenCollect) begin tsCollect <= leCycle; seenCollect <= True; end
+            packetsCompleted <= packetsCompleted + 1;
+            if (!seenFilterDone) begin tsFilterDone <= leCycle; seenFilterDone <= True; end
         end else begin
             hitCount <= nextHitCount;
         end
@@ -121,6 +145,8 @@ module mkLongEngine(LongEngineIfc);
         Bit#(16) nValid = (len >= 8) ? (len - 7) : 0;
         if (nValid > 57) nValid = 57;
         validCountQ.enq(truncate(nValid));
+        packetsAccepted <= packetsAccepted + 1;
+        validAnchors <= validAnchors + zeroExtend(nValid);
         if (!seenPut) begin tsPut <= leCycle; seenPut <= True; end
     endmethod
 
@@ -136,13 +162,31 @@ module mkLongEngine(LongEngineIfc);
     method Bit#(32) perfTsPut     = tsPut;
     method Bit#(32) perfTsFeed    = tsFeed;
     method Bit#(32) perfTsDrain   = tsDrain;
-    method Bit#(32) perfTsCollect = tsCollect;
+    method Bit#(32) perfTsFilterDone = tsFilterDone;
+    method Bit#(32) perfPacketsAccepted = packetsAccepted;
+    method Bit#(32) perfPacketsCompleted = packetsCompleted;
+    method Bit#(32) perfValidAnchors = validAnchors;
+    method Bit#(32) perfPreFilterLookupReqs = preFilterLookupReqs;
+    method Bit#(32) perfPreFilterLookupResps = preFilterLookupResps;
+    method Bit#(32) perfPreFilterHits = preFilterHits;
+    method Bit#(32) perfFilterBusyCycles = filterBusyCycles;
 
     method Action perfReset;
         seenPut     <= False;
         seenFeed    <= False;
         seenDrain   <= False;
-        seenCollect <= False;
+        seenFilterDone <= False;
+        tsPut <= 0;
+        tsFeed <= 0;
+        tsDrain <= 0;
+        tsFilterDone <= 0;
+        packetsAccepted <= 0;
+        packetsCompleted <= 0;
+        validAnchors <= 0;
+        preFilterLookupReqs <= 0;
+        preFilterLookupResps <= 0;
+        preFilterHits <= 0;
+        filterBusyCycles <= 0;
     endmethod
 endmodule
 

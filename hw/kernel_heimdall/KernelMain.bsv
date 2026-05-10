@@ -17,10 +17,16 @@ import LongEngine::*;
 //
 // scalar00[15:0] = number of packets
 //
-// Output word 0 (cycle counters):
+// Output word 0 (cycle counters and LongEngine counters):
 //   [31:0]   = cycleStart, [63:32] = cycleAllFed,
 //   [95:64]  = cycleFirstOut, [127:96] = cycleAllDone,
 //   [159:128]= numPackets
+//   [191:160]= leTsPut, [223:192] = leTsFeed,
+//   [255:224]= leTsDrain, [287:256] = leTsFilterDone,
+//   [319:288]= lePacketsAccepted, [351:320] = lePacketsCompleted,
+//   [383:352]= leValidAnchors, [415:384] = lePreFilterLookupReqs,
+//   [447:416]= lePreFilterLookupResps, [479:448] = lePreFilterHits,
+//   [511:480]= leFilterBusyCycles
 // Output words 1..N: per-packet prefilter hit count
 
 interface KernelMainIfc;
@@ -224,11 +230,17 @@ module mkKernelMain(KernelMainIfc);
         header[95:64]   = cycleFirstOut;
         header[127:96]  = cycleAllDone;
         header[159:128] = numPackets;
-        // LongEngine internal timestamps (first packet, lane 0)
         header[191:160] = longEngine.perfTsPut;
         header[223:192] = longEngine.perfTsFeed;
         header[255:224] = longEngine.perfTsDrain;
-        header[287:256] = longEngine.perfTsCollect;
+        header[287:256] = longEngine.perfTsFilterDone;
+        header[319:288] = longEngine.perfPacketsAccepted;
+        header[351:320] = longEngine.perfPacketsCompleted;
+        header[383:352] = longEngine.perfValidAnchors;
+        header[415:384] = longEngine.perfPreFilterLookupReqs;
+        header[447:416] = longEngine.perfPreFilterLookupResps;
+        header[479:448] = longEngine.perfPreFilterHits;
+        header[511:480] = longEngine.perfFilterBusyCycles;
         writeWordQs[1].enq(header);
         writeCnt <= 1;
         writeAddr <= 64;
