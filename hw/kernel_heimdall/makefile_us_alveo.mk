@@ -33,7 +33,7 @@ host:
 #----------------------------------------------------------------------------------------
 # 6. Kernel Hardware Build (BSV -> Verilog -> XO -> XCLBIN)
 #----------------------------------------------------------------------------------------
-$(OBJ_DIR)/verilog/.done: $(wildcard *.bsv) $(wildcard *.v)
+$(OBJ_DIR)/verilog/.done: $(wildcard *.bsv) $(wildcard *.v) ./scripts/verilogcopy.sh
 	mkdir -p $(OBJ_DIR)
 	mkdir -p $(OBJ_DIR)/verilog
 	bsc $(BSCFLAGS) $(BSCFLAGS_SYNTH) -remove-dollar -p +:$(BLIB_DIR)/bsv -verilog -u -g kernel KernelTop.bsv
