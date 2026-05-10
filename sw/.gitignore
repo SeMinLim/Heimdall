@@ -1,5 +1,8 @@
 # Build output
+__pycache__/
+host_*/__pycache__/
 host_*/obj/
+host_*/prefilter_smoke/
 prefilter_builder/obj/
 
 # Emulation config
